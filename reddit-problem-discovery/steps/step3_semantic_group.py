@@ -25,15 +25,15 @@ def _load_model():
     """Load sentence-transformers model with caching."""
     try:
         from sentence_transformers import SentenceTransformer
-        print("  → Loading model: all-MiniLM-L6-v2")
+        print("  -> Loading model: all-MiniLM-L6-v2")
         model = SentenceTransformer("all-MiniLM-L6-v2")
         return model
     except ImportError:
-        print("  ✗ sentence-transformers not installed!")
+        print("  [!] sentence-transformers not installed!")
         print("    Run: pip install sentence-transformers")
         raise
     except Exception as e:
-        print(f"  ✗ Failed to load model: {e}")
+        print(f"  [!] Failed to load model: {e}")
         print("    Make sure sentence-transformers is installed: pip install sentence-transformers")
         raise
 
@@ -108,7 +108,7 @@ def group_problems(filtered_posts, problem_ids_df, problem_evidence_df):
         tuple of (updated_problem_ids_df, updated_problem_evidence_df)
     """
     if not filtered_posts:
-        print("  → No posts to process")
+        print("  -> No posts to process")
         return problem_ids_df, problem_evidence_df
 
     # Load model
@@ -135,7 +135,7 @@ def group_problems(filtered_posts, problem_ids_df, problem_evidence_df):
     new_problems_created = 0
     today = date.today().isoformat()
 
-    print(f"  → {len(filtered_posts)} posts processed")
+    print(f"  -> {len(filtered_posts)} posts processed")
 
     for post in filtered_posts:
         # Create embedding for this post
@@ -227,8 +227,8 @@ def group_problems(filtered_posts, problem_ids_df, problem_evidence_df):
                     str(dates.min())
                 )
 
-    print(f"  → {mapped_to_existing} posts mapped to existing problems")
-    print(f"  → {new_problems_created} new problems created")
-    print(f"  → Total problems tracked: {len(problem_ids_df)}")
+    print(f"  -> {mapped_to_existing} posts mapped to existing problems")
+    print(f"  -> {new_problems_created} new problems created")
+    print(f"  -> Total problems tracked: {len(problem_ids_df)}")
 
     return problem_ids_df, problem_evidence_df

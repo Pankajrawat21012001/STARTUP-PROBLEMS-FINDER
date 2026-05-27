@@ -97,9 +97,9 @@ def filter_noise(posts, blocklist_path="config/noise_blocklist.json"):
             passed.append(post)
 
     total_removed = sum(removed_reasons.values())
-    print(f"  → {len(posts)} posts checked")
-    print(f"  → {len(passed)} posts passed noise filter")
-    print(f"  → {total_removed} posts removed (low upvotes: {removed_reasons['low_upvotes']}, "
+    print(f"  -> {len(posts)} posts checked")
+    print(f"  -> {len(passed)} posts passed noise filter")
+    print(f"  -> {total_removed} posts removed (low upvotes: {removed_reasons['low_upvotes']}, "
           f"blocked keywords: {removed_reasons['blocked_keywords']}, "
           f"physical product: {removed_reasons['physical_product']}, "
           f"other: {removed_reasons['free_only'] + removed_reasons['too_short'] + removed_reasons['link_post']})")

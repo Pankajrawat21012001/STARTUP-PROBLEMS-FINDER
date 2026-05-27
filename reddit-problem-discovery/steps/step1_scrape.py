@@ -28,8 +28,10 @@ def scrape_reddit(subreddits, search_phrases, existing_post_ids):
     if not scraper_api_key or scraper_api_key == "your_scraperapi_key":
         print("  [!] Warning: SCRAPER_API_KEY is not set in .env. Search calls may fail.")
 
+    target_new_posts = int(os.getenv("TARGET_NEW_POSTS", "100"))
     total_searches = len(subreddits) * len(search_phrases)
-    print(f"  -> Searching {len(subreddits)} subreddits x {len(search_phrases)} phrases = {total_searches} searches")
+    print(f"  -> Target new posts to collect: {target_new_posts}")
+    print(f"  -> Maximum search capacity: {len(subreddits)} subreddits x {len(search_phrases)} phrases = {total_searches} searches")
 
     new_posts = []
     seen_in_this_run = set()
@@ -37,10 +39,14 @@ def scrape_reddit(subreddits, search_phrases, existing_post_ids):
     search_count = 0
 
     for sub_name in subreddits:
+        if len(new_posts) >= target_new_posts:
+            break
         for phrase in search_phrases:
+            if len(new_posts) >= target_new_posts:
+                break
+
             search_count += 1
-            if search_count % 20 == 0:
-                print(f"  -> Progress: {search_count}/{total_searches} searches completed...")
+            print(f"  -> [{search_count}/{total_searches}] Searching r/{sub_name} for '{phrase}'...")
 
             try:
                 # Construct search URL through ScraperAPI proxy
@@ -49,13 +55,17 @@ def scrape_reddit(subreddits, search_phrases, existing_post_ids):
 
                 response = requests.get(scraper_url, timeout=20)
                 if response.status_code != 200:
-                    print(f"  [!] Error searching r/{sub_name} for '{phrase}' via ScraperAPI (Status: {response.status_code})")
+                    print(f"     [!] Error searching r/{sub_name} for '{phrase}' via ScraperAPI (Status: {response.status_code})")
                     time.sleep(1)
                     continue
 
                 children = response.json().get("data", {}).get("children", [])
+                query_new_posts_count = 0
 
                 for child in children:
+                    if len(new_posts) >= target_new_posts:
+                        break
+
                     post_data = child.get("data", {})
                     post_id = str(post_data.get("id"))
 
@@ -70,6 +80,13 @@ def scrape_reddit(subreddits, search_phrases, existing_post_ids):
                         continue
 
                     seen_in_this_run.add(post_id)
+
+                    # Log the new post discovery
+                    title_preview = post_data.get("title", "")
+                    if len(title_preview) > 60:
+                        title_preview = title_preview[:57] + "..."
+                    print(f"     [+] Found new post: \"{title_preview}\" (ID: {post_id})")
+                    print(f"         Fetching comments for post {post_id}...")
 
                     # Fetch top 3 comments
                     top_comments = _get_top_comments(post_id, scraper_api_key)
@@ -89,16 +106,23 @@ def scrape_reddit(subreddits, search_phrases, existing_post_ids):
                         "passed_noise_filter": None
                     }
                     new_posts.append(post_dict)
+                    query_new_posts_count += 1
+
+                if query_new_posts_count > 0:
+                    print(f"     -> Added {query_new_posts_count} new posts to processing queue (Total: {len(new_posts)}/{target_new_posts})")
 
                 # Rate limit: 1 second between search calls
                 time.sleep(1)
 
             except Exception as e:
-                print(f"  [!] Error searching r/{sub_name} for '{phrase}': {e}")
+                print(f"     [!] Error searching r/{sub_name} for '{phrase}': {e}")
                 time.sleep(1)
                 continue
 
-    print(f"  -> Found {len(new_posts) + skipped_existing} raw posts")
+    if len(new_posts) >= target_new_posts:
+        print(f"\n  -> Target reached ({len(new_posts)}/{target_new_posts}). Stopping scraper.")
+
+    print(f"  -> Found {len(new_posts) + skipped_existing} raw posts matching queries")
     print(f"  -> After deduplication: {len(new_posts)} new posts ({skipped_existing} already seen)")
 
     return new_posts

@@ -38,7 +38,7 @@ def score_wtp(evidence_df, raw_posts_df, problem_ids_df):
         tuple of (updated_evidence_df, updated_problem_ids_df)
     """
     if evidence_df.empty:
-        print("  → No evidence rows to score")
+        print("  -> No evidence rows to score")
         return evidence_df, problem_ids_df
 
     scored_count = 0
@@ -88,7 +88,7 @@ def score_wtp(evidence_df, raw_posts_df, problem_ids_df):
 
     avg_overall = round(evidence_df["wtp_score"].astype(float).mean(), 1) if not evidence_df.empty else 0.0
 
-    print(f"  → {scored_count} evidence rows scored for WTP")
-    print(f"  → Average WTP score: {avg_overall} / 3.0")
+    print(f"  -> {scored_count} evidence rows scored for WTP")
+    print(f"  -> Average WTP score: {avg_overall} / 3.0")
 
     return evidence_df, problem_ids_df

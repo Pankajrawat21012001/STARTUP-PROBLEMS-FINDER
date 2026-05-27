@@ -13,12 +13,12 @@ def load_csv(filepath, columns):
             df = pd.read_csv(filepath, encoding="utf-8")
             # Verify columns match — if corrupted, recreate
             if list(df.columns) != columns:
-                print(f"  ⚠ Column mismatch in {filepath}, recreating with correct schema")
+                print(f"  [!] Column mismatch in {filepath}, recreating with correct schema")
                 df = pd.DataFrame(columns=columns)
             return df
         except Exception as e:
-            print(f"  ⚠ Error reading {filepath}: {e}")
-            print(f"  → Recreating with correct schema")
+            print(f"  [!] Error reading {filepath}: {e}")
+            print(f"  -> Recreating with correct schema")
             return pd.DataFrame(columns=columns)
     return pd.DataFrame(columns=columns)
 
