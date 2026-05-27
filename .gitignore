@@ -1,0 +1,26 @@
+# Environment variables
+.env
+reddit-problem-discovery/.env
+
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Output data directory
+reddit-problem-discovery/data/
+
+# Streamlit configurations (if any local/secret configs are used)
+.streamlit/
+
+# OS generated files
+.DS_Store
+Thumbs.db

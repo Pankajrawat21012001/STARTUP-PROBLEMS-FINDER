@@ -1,0 +1,14 @@
+{
+  "min_upvotes": 5,
+  "blocked_keywords": [
+    "meme", "joke", "lol", "haha", "funny", "rant", "news", "article",
+    "breaking", "announcement", "hiring", "job posting", "looking for work"
+  ],
+  "physical_product_keywords": [
+    "3d print", "manufacture", "hardware device", "physical product",
+    "factory", "supply chain", "warehouse", "shipping logistics"
+  ],
+  "free_only_keywords": [
+    "free only", "open source only", "would never pay", "should be free"
+  ]
+}
