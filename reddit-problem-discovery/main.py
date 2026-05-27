@@ -25,7 +25,6 @@ from steps.utils import (
 from steps.step1_scrape import scrape_reddit
 from steps.step2_noise_filter import filter_noise
 from steps.step3_semantic_group import group_problems
-from steps.step4_wtp_score import score_wtp
 from steps.step5_groq_score import score_with_groq
 
 
@@ -52,13 +51,8 @@ def main():
     load_dotenv(env_path)
 
     # Verify API keys are set
-    if not os.getenv("REDDIT_CLIENT_ID") or os.getenv("REDDIT_CLIENT_ID") == "your_reddit_client_id":
-        print("\n✗ ERROR: Please set your Reddit API credentials in .env file")
-        print("  Get credentials at: https://www.reddit.com/prefs/apps")
-        sys.exit(1)
-
     if not os.getenv("GROQ_API_KEY") or os.getenv("GROQ_API_KEY") == "your_groq_api_key":
-        print("\n✗ ERROR: Please set your Groq API key in .env file")
+        print("\n[x] ERROR: Please set your Groq API key in .env file")
         print("  Get key at: https://console.groq.com")
         sys.exit(1)
 
@@ -100,7 +94,7 @@ def main():
             raw_posts_df = pd.concat([raw_posts_df, new_posts_df], ignore_index=True)
 
         save_csv(raw_posts_df, RAW_POSTS_PATH)
-        print(f"  → Saved to data/raw_posts.csv")
+        print(f"  -> Saved to data/raw_posts.csv")
 
         # ── Step 2: Noise Filter ──────────────────────────────────
         print(f"\n[Step 2] Noise filtering...")
@@ -125,32 +119,22 @@ def main():
 
         save_csv(problem_ids_df, PROBLEM_IDS_PATH)
         save_csv(problem_evidence_df, PROBLEM_EVIDENCE_PATH)
-        print(f"  → Saved to data/problem_ids.csv and data/problem_evidence.csv")
+        print(f"  -> Saved to data/problem_ids.csv and data/problem_evidence.csv")
 
-        # ── Step 4: WTP Scoring ───────────────────────────────────
-        print(f"\n[Step 4] WTP scoring...")
-        problem_evidence_df, problem_ids_df = score_wtp(
-            problem_evidence_df, raw_posts_df, problem_ids_df
-        )
-
-        save_csv(problem_evidence_df, PROBLEM_EVIDENCE_PATH)
-        save_csv(problem_ids_df, PROBLEM_IDS_PATH)
-        print(f"  → Saved to data/problem_evidence.csv")
-
-        # ── Step 5: Groq Scoring ─────────────────────────────────
-        print(f"\n[Step 5] Groq scoring...")
+        # ── Step 4: Groq Scoring ─────────────────────────────────
+        print(f"\n[Step 4] Groq scoring...")
         problem_ids_df, problem_scores_df = score_with_groq(
             problem_ids_df, problem_evidence_df, raw_posts_df, problem_scores_df
         )
 
         save_csv(problem_scores_df, PROBLEM_SCORES_PATH)
         save_csv(problem_ids_df, PROBLEM_IDS_PATH)
-        print(f"  → Saved to data/problem_scores.csv")
+        print(f"  -> Saved to data/problem_scores.csv")
 
     except KeyboardInterrupt:
-        print("\n\n⚠ Pipeline interrupted by user. Saving data...")
+        print("\n\n[!] Pipeline interrupted by user. Saving data...")
     except Exception as e:
-        print(f"\n\n✗ Pipeline error: {e}")
+        print(f"\n\n[x] Pipeline error: {e}")
         import traceback
         traceback.print_exc()
         print("\nSaving data before exit...")
@@ -162,7 +146,7 @@ def main():
             save_csv(problem_evidence_df, PROBLEM_EVIDENCE_PATH)
             save_csv(problem_scores_df, PROBLEM_SCORES_PATH)
         except Exception as save_err:
-            print(f"  ✗ Error saving CSVs: {save_err}")
+            print(f"  [x] Error saving CSVs: {save_err}")
 
     # ── Summary ──────────────────────────────────────────────────
     end_time = datetime.now()

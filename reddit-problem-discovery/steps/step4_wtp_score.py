@@ -26,6 +26,8 @@ URGENCY_PHRASES = [
 def score_wtp(evidence_df, raw_posts_df, problem_ids_df):
     """
     Score willingness-to-pay for each evidence row.
+    NOTE: This function is no longer called from main.py, as WTP scoring is now
+    folded directly into Step 5 (Groq scoring). Keep this file for its constants.
 
     Args:
         evidence_df: problem_evidence DataFrame

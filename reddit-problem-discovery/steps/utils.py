@@ -63,7 +63,7 @@ PROBLEM_EVIDENCE_COLUMNS = [
 ]
 
 PROBLEM_SCORES_COLUMNS = [
-    "id", "problem_id", "run_date", "problem_acuteness", "customer_clarity",
+    "id", "problem_id", "run_date", "wtp_score", "problem_acuteness", "customer_clarity",
     "market_size", "competition", "good_ideaspace", "real_problem",
     "tarpit_risk", "good_proxies", "total_score", "freshness_weight", "final_rank_score"
 ]

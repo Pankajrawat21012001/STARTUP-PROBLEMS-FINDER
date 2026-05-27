@@ -13,6 +13,7 @@ from datetime import datetime, date, timedelta
 import pandas as pd
 
 from .utils import next_id
+from .step4_wtp_score import WTP_PHRASES, URGENCY_PHRASES
 
 
 def _calculate_freshness_weight(last_seen_date_str):
@@ -33,6 +34,34 @@ def _calculate_freshness_weight(last_seen_date_str):
             return 0.6
     except Exception:
         return 0.6
+
+
+def _compute_wtp_score(evidence_posts_df):
+    """
+    Calculate average WTP score across all evidence posts for a problem.
+    """
+    if evidence_posts_df.empty:
+        return 0.0
+
+    scores = []
+    for _, post in evidence_posts_df.iterrows():
+        title = str(post.get("title", ""))
+        body = str(post.get("body", ""))
+        top_comments = str(post.get("top_comments", ""))
+
+        full_text = f"{title} {body} {top_comments}".lower()
+
+        wtp_count = 0
+        for phrase in WTP_PHRASES:
+            if phrase in full_text:
+                wtp_count += 1
+        wtp_score = min(wtp_count, 3)
+        scores.append(wtp_score)
+
+    if not scores:
+        return 0.0
+
+    return round(sum(scores) / len(scores), 2)
 
 
 def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_scores_df):
@@ -72,10 +101,10 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         qualifying = qualifying[~qualifying["problem_id"].isin(scored_today)]
 
     if qualifying.empty:
-        print("  → No problems qualify for scoring (need evidence >= 3 and WTP >= 1.0)")
+        print("  -> No problems qualify for scoring (need evidence >= 3 and WTP >= 1.0)")
         return problem_ids_df, problem_scores_df
 
-    print(f"  → {len(qualifying)} problems qualify for scoring (evidence >= 3, WTP >= 1.0)")
+    print(f"  -> {len(qualifying)} problems qualify for scoring (evidence >= 3, WTP >= 1.0)")
 
     scored_count = 0
 
@@ -84,7 +113,7 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         problem_name = problem["problem_name"]
         industry = problem["industry"]
 
-        print(f"  → Scoring problem {i+1}/{len(qualifying)}: \"{problem_name}\"")
+        print(f"  -> Scoring problem {i+1}/{len(qualifying)}: \"{problem_name}\"")
 
         # Gather evidence posts
         evidence_rows = problem_evidence_df[
@@ -130,9 +159,10 @@ Score each factor from 1–10. Return ONLY a JSON object with no explanation:
 }}"""
 
         # Call Groq API
+        wtp_score = _compute_wtp_score(evidence_posts)
         scores = _call_groq_for_scores(client, prompt)
         if scores is None:
-            print(f"  ⚠ Failed to score \"{problem_name}\", skipping")
+            print(f"  [!] Failed to score \"{problem_name}\", skipping")
             continue
 
         # Calculate total and final scores
@@ -150,6 +180,7 @@ Score each factor from 1–10. Return ONLY a JSON object with no explanation:
             "id": score_id,
             "problem_id": problem_id,
             "run_date": today,
+            "wtp_score": wtp_score,
             **{k: scores.get(k, 5) for k in factor_keys},
             "total_score": total_score,
             "freshness_weight": freshness_weight,
@@ -171,7 +202,7 @@ Score each factor from 1–10. Return ONLY a JSON object with no explanation:
         # Rate limit
         time.sleep(0.5)
 
-    print(f"  → {scored_count} problems scored")
+    print(f"  -> {scored_count} problems scored")
 
     return problem_ids_df, problem_scores_df
 
@@ -210,10 +241,10 @@ def _call_groq_for_scores(client, prompt):
 
         except Exception as e:
             if attempt == 0:
-                print(f"  ⚠ Groq parse error (retrying): {e}")
+                print(f"  [!] Groq parse error (retrying): {e}")
                 time.sleep(1)
             else:
-                print(f"  ✗ Groq scoring failed after retry: {e}")
+                print(f"  [x] Groq scoring failed after retry: {e}")
                 return None
 
     return None
