@@ -6,6 +6,7 @@ Run with: streamlit run dashboard.py
 
 import os
 import re
+import json
 import html as html_lib
 import pandas as pd
 import streamlit as st
@@ -26,6 +27,20 @@ PROBLEM_IDS_PATH    = os.path.join(DATA_DIR, "problem_ids.csv")
 PROBLEM_EVIDENCE_PATH = os.path.join(DATA_DIR, "problem_evidence.csv")
 PROBLEM_SCORES_PATH = os.path.join(DATA_DIR, "problem_scores.csv")
 RAW_POSTS_PATH      = os.path.join(DATA_DIR, "raw_posts.csv")
+IDEA_EVALUATION_PATH = os.path.join(DATA_DIR, "idea_evaluation.csv")
+
+EVALUATION_DIMENSIONS = [
+    {"key": "problem_need",      "category": "Problem & Need (Acute Problem)",  "question": "Vitamin or Painkiller? Painful enough to pay for?"},
+    {"key": "customer_clarity",  "category": "Customer Clarity",                "question": "Clearly defined target user with WTP?"},
+    {"key": "market_size",       "category": "Market Size (Enough?)",           "question": "Market large enough? Growing or shrinking?"},
+    {"key": "competition",       "category": "Competition",                     "question": "Who are competitors? Why choose this?"},
+    {"key": "demand_validation", "category": "Do People Want This?",            "question": "Organic demand signals exist?"},
+    {"key": "recently_possible", "category": "Recently Possible",               "question": "What tech/market shift enables this now?"},
+    {"key": "good_proxies",      "category": "Good Proxies",                    "question": "Adjacent companies proving the market?"},
+    {"key": "ideaspace",         "category": "Good Ideaspace",                  "question": "Strong category with expansion paths?"},
+    {"key": "real_problem",      "category": "Is It a Real Problem?",           "question": "Genuine problem or solution looking for one?"},
+    {"key": "tarpit_risk",       "category": "Tarpit Idea",                     "question": "Many failed here before? Why will this succeed?"},
+]
 
 # WTP phrases (kept in sync with step4_wtp_score.py)
 WTP_PHRASES = [
@@ -72,7 +87,8 @@ def load_data():
         ("problems", PROBLEM_IDS_PATH),
         ("evidence", PROBLEM_EVIDENCE_PATH),
         ("scores",   PROBLEM_SCORES_PATH),
-        ("posts",    RAW_POSTS_PATH)
+        ("posts",    RAW_POSTS_PATH),
+        ("evaluations", IDEA_EVALUATION_PATH)
     ]:
         if os.path.exists(path):
             try:
@@ -112,9 +128,9 @@ def compute_live_wtp(evidence_df: pd.DataFrame, posts_df: pd.DataFrame) -> pd.Da
         ]).lower()
 
         wtp_count = sum(1 for p in WTP_PHRASES if p in full_text)
-        ev.at[idx, "wtp_score"] = min(wtp_count, 3)
+        ev.loc[idx, "wtp_score"] = min(wtp_count, 3)
         matched = [p for p in URGENCY_PHRASES if p in full_text]
-        ev.at[idx, "urgency_keywords"] = ", ".join(matched)
+        ev.loc[idx, "urgency_keywords"] = ", ".join(matched)
 
     return ev
 
@@ -146,43 +162,51 @@ st.markdown("""
     #MainMenu                    { visibility: hidden; }
     footer                       { visibility: hidden; }
 
-    /* Make the native header invisible but NOT removed — sidebar toggle lives here */
-    header[data-testid="stHeader"] {
-        background: transparent !important;
-        border-bottom: none !important;
-        box-shadow: none !important;
-        height: 40px !important;
+    /* Force sidebar to always be visible */
+    section[data-testid="stSidebar"] {
+        display: block !important;
+        width: 21rem !important;
+        min-width: 21rem !important;
+        transform: none !important;
+        position: relative !important;
+        visibility: visible !important;
+        opacity: 1 !important;
     }
-
-    /* Sidebar expand/collapse control — always visible, themed to match dashboard */
+    section[data-testid="stSidebar"] > div {
+        width: 21rem !important;
+    }
+    
+    /* Hide both toggle buttons — sidebar is always open */
+    [data-testid="stSidebarCollapseButton"],
     [data-testid="collapsedControl"] {
-        display:       flex        !important;
-        visibility:    visible     !important;
-        position:      fixed       !important;
-        top:           12px        !important;
-        left:          12px        !important;
-        z-index:       999999      !important;
-        background:    rgba(129,140,248,0.18) !important;
-        border:        1px solid rgba(129,140,248,0.35) !important;
-        border-radius: 8px !important;
-        color:         #818cf8     !important;
-        padding:       4px         !important;
-        cursor:        pointer     !important;
-        transition:    background 0.2s, color 0.2s !important;
-    }
-    [data-testid="collapsedControl"]:hover {
-        background: rgba(129,140,248,0.35) !important;
-        color:      #c084fc            !important;
+        display: none !important;
     }
 
-    /* Make the sidebar buttons smaller */
-    div[data-testid="stSidebar"] button {
-        padding: 4px 10px !important;
-        font-size: 0.8rem !important;
-        min-height: unset !important;
-        height: auto !important;
-        line-height: 1.4 !important;
-        border-radius: 8px !important;
+    /* Style the sidebar refresh button beautifully and full-width */
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button {
+        width: 100% !important;
+        background: linear-gradient(90deg, #818cf8, #c084fc) !important;
+        color: white !important;
+        font-weight: 700 !important;
+        font-size: 0.95rem !important;
+        padding: 10px 16px !important;
+        border-radius: 10px !important;
+        border: none !important;
+        box-shadow: 0 4px 15px rgba(129, 140, 248, 0.2) !important;
+        transition: all 0.3s ease !important;
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        gap: 8px !important;
+        cursor: pointer !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+        background: linear-gradient(90deg, #9333ea, #4f46e5) !important;
+        box-shadow: 0 6px 20px rgba(129, 140, 248, 0.4) !important;
+        transform: translateY(-2px) !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button:active {
+        transform: translateY(1px) !important;
     }
 
     /* Main background */
@@ -348,6 +372,7 @@ problems_df = data["problems"]
 evidence_df = data["evidence"]
 scores_df   = data["scores"]
 posts_df    = data["posts"]
+evaluations_df = data.get("evaluations", pd.DataFrame())
 
 # Re-compute WTP live (step4 is no longer run in the pipeline)
 if not evidence_df.empty and not posts_df.empty:
@@ -387,8 +412,8 @@ st.markdown("""
 total_problems = len(problems_df) if not problems_df.empty else 0
 scanned_count  = len(posts_df)   if not posts_df.empty    else 0
 noise_count    = 0
-if not posts_df.empty and "is_noise" in posts_df.columns:
-    noise_count = int(posts_df["is_noise"].astype(str).str.lower().isin(["true","1","1.0"]).sum())
+if not posts_df.empty and "passed_noise_filter" in posts_df.columns:
+    noise_count = int(posts_df["passed_noise_filter"].astype(str).str.lower().isin(["false","0","0.0"]).sum())
 
 last_run = "Never"
 if not posts_df.empty and "scraped_at" in posts_df.columns:
@@ -397,7 +422,9 @@ if not posts_df.empty and "scraped_at" in posts_df.columns:
     except Exception:
         last_run = "Unknown"
 
-col1, col2, col3 = st.columns(3)
+avg_rank = f"{problems_df['latest_final_rank_score'].mean():.1f}" if not problems_df.empty and 'latest_final_rank_score' in problems_df.columns else "0.0"
+
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
     <div class="metric-card">
@@ -420,22 +447,26 @@ with col3:
         <div class="metric-label">Last Run Date</div>
     </div>""", unsafe_allow_html=True)
 
+with col4:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-value">{avg_rank}</div>
+        <div class="metric-label">Avg Rank Score</div>
+    </div>""", unsafe_allow_html=True)
+
 st.markdown("<br>", unsafe_allow_html=True)
 
 
 # ── Sidebar Filters ───────────────────────────────────────────────
 with st.sidebar:
-    # Top filters title + small refresh button side by side
-    title_col, btn_col = st.columns([3.5, 1])
-    with title_col:
-        st.markdown("### 🎯 Filters")
-    with btn_col:
-        st.markdown("<div style='padding-top: 6px;'>", unsafe_allow_html=True)
-        if st.button("🔄", help="Refresh data"):
-            st.cache_data.clear()
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("---")
+    st.markdown("<h3 style='text-align: center; color: white; margin-top: 10px; margin-bottom: 15px; font-weight: 700; letter-spacing: 0.5px;'>🎯 Filters & Controls</h3>", unsafe_allow_html=True)
+    
+    # Premium Centered Full-Width Refresh Button
+    if st.button("🔄 Refresh Dashboard", use_container_width=True, help="Clear cache and reload raw data"):
+        st.cache_data.clear()
+        st.rerun()
+        
+    st.markdown("<hr style='margin: 20px 0; border: none; border-top: 1px dashed rgba(255,255,255,0.15);'>", unsafe_allow_html=True)
 
     # Industry filter
     industries = ["All"]
@@ -466,7 +497,16 @@ with st.sidebar:
     sort_by = sort_options[sort_by_label]
 
     # Top N
-    top_n = st.selectbox("Show Top N", [10, 20, 50], index=0)
+    top_n = int(st.number_input("Show Top N", min_value=1, value=10, step=1))
+    
+    # st.markdown("---")🎯 Filters
+
+    # st.markdown("### 📊 Database Summary")
+    # sub_count = len(posts_df['subreddit'].unique()) if not posts_df.empty and 'subreddit' in posts_df.columns else 0
+    # st.markdown(f"- **{sub_count}** Subreddits Tracking")
+    # st.markdown(f"- **{len(WTP_PHRASES)}** WTP Phrases")
+    # st.markdown(f"- **{len(URGENCY_PHRASES)}** Urgency Phrases")
+    # st.markdown("- **Model:** Llama 3.3 70B")
 
 
 # ── Apply Filters ────────────────────────────────────────────────
@@ -510,7 +550,7 @@ st.markdown(f"### Showing {len(filtered_df)} problems")
 
 for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
     problem_id    = problem["problem_id"]
-    problem_name  = problem.get("problem_name",          "Unknown")
+    problem_name  = html_lib.escape(str(problem.get("problem_name", "Unknown")))
     industry      = problem.get("industry",               "Other")
     evidence_count = int(problem.get("evidence_count",    0))
     avg_wtp        = float(problem.get("avg_wtp_score",   0))
@@ -518,8 +558,23 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
     total_score    = float(problem.get("latest_total_score",      0))
     last_seen      = str(problem.get("last_seen_date",    "N/A"))
 
+    # Freshness calculation
+    freshness = "Old"
+    if last_seen != "N/A":
+        try:
+            days_old = (datetime.now().date() - datetime.strptime(last_seen[:10], "%Y-%m-%d").date()).days
+            if days_old <= 7: freshness = "🟢 Fresh"
+            elif days_old <= 14: freshness = "🟡 Recent"
+            elif days_old <= 30: freshness = "🟠 Aging"
+            else: freshness = "🔴 Old"
+        except ValueError:
+            pass
+
     wtp_cls   = wtp_color_class(avg_wtp)
     score_cls = score_class(final_score)
+
+    # UI 3: Hide 0.0 badge if unscored
+    score_badge_html = f'<span class="score-badge {score_cls}">{final_score:.1f}/100</span>' if final_score > 0 else '<span style="font-size:0.8rem; color:rgba(255,255,255,0.4);">No Score</span>'
 
     header_html = f"""
     <div class="problem-row">
@@ -528,12 +583,13 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                 <span style="font-size:1.3rem; font-weight:800; color:rgba(255,255,255,0.3);">#{rank}</span>
                 <span style="font-size:1.05rem; font-weight:600; color:#e2e8f0;">{problem_name}</span>
                 <span class="industry-badge">{industry}</span>
+                <span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1);">{freshness}</span>
             </div>
             <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
                 <span style="font-size:0.85rem; color:rgba(255,255,255,0.5);">📝 {evidence_count}</span>
                 <span class="wtp-stars {wtp_cls}">WTP: {avg_wtp:.1f}</span>
                 {f'<span style="font-size:0.8rem; font-weight:600; color:#a78bfa; background:rgba(167,139,250,0.12); border:1px solid rgba(167,139,250,0.25); border-radius:6px; padding:2px 8px;">LLM: {total_score:.0f}/80</span>' if total_score > 0 else ''}
-                <span class="score-badge {score_cls}">{final_score:.1f}/100</span>
+                {score_badge_html}
                 <span style="font-size:0.8rem; color:rgba(255,255,255,0.35);">{last_seen}</span>
             </div>
         </div>
@@ -572,6 +628,9 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                 row1_cols = st.columns(4)
                 row2_cols = st.columns(4)
                 all_cols  = row1_cols + row2_cols
+                
+                # Add WTP Tile above factors
+                # st.markdown(f'<div style="margin-bottom:12px; padding:10px; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:8px; display:inline-block;"><div style="font-size:0.7rem; color:#fbbf24; text-transform:uppercase;">Willingness to Pay</div><div style="font-size:1.3rem; font-weight:bold; color:#fbbf24;">{avg_wtp:.1f}/3.0</div></div>', unsafe_allow_html=True)
 
                 for col_widget, name, key in zip(all_cols, factor_names, factor_keys):
                     val = float(latest.get(key, 0))
@@ -590,6 +649,18 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                         )
             else:
                 st.info("No scores yet — run step5_groq_score.py to score this problem")
+                st.markdown(f"""
+                <div style="display:flex; gap:20px; margin-top:10px;">
+                    <div style="text-align:center; padding:12px; background:rgba(255,255,255,0.05); border-radius:8px; min-width:100px;">
+                        <div style="font-size:2rem; font-weight:800;">{evidence_count}</div>
+                        <div style="font-size:0.8rem; color:gray; text-transform:uppercase;">Evidence</div>
+                    </div>
+                    <div style="text-align:center; padding:12px; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.3); border-radius:8px; min-width:100px;">
+                        <div style="font-size:2rem; font-weight:800; color:#fbbf24;">{avg_wtp:.1f}</div>
+                        <div style="font-size:0.8rem; color:#fbbf24; text-transform:uppercase;">WTP Score</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
         # ── Score History Chart ──────────────────────────────────
         with detail_col2:
@@ -597,117 +668,196 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
 
             if not problem_scores.empty:
                 problem_scores_sorted = problem_scores.sort_values("run_date")
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(
-                    x=problem_scores_sorted["run_date"],
-                    y=problem_scores_sorted["final_rank_score"].astype(float),
-                    mode="lines+markers",
-                    line=dict(color="#818cf8", width=3),
-                    marker=dict(size=8, color="#c084fc"),
-                    name="Final Rank Score"
-                ))
-                fig2.update_layout(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="white"),
-                    height=320,
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    xaxis=dict(showgrid=False, title="Run Date"),
-                    yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)",
-                               title="Score /100", range=[0, 100])
-                )
+                
+                if len(problem_scores_sorted) == 1:
+                    latest = problem_scores_sorted.iloc[0]
+                    categories = ["Acuteness", "Clarity", "Market Size", "Competition", "Ideaspace", "Real Problem", "Tarpit Risk", "Proxies"]
+                    values = [float(latest.get(k,0)) for k in ["problem_acuteness", "customer_clarity", "market_size", "competition", "good_ideaspace", "real_problem", "tarpit_risk", "good_proxies"]]
+                    
+                    fig2 = go.Figure(data=go.Scatterpolar(
+                      r=values + [values[0]],
+                      theta=categories + [categories[0]],
+                      fill='toself',
+                      line=dict(color="#818cf8"),
+                      marker=dict(color="#c084fc")
+                    ))
+                    fig2.update_layout(
+                      polar=dict(
+                        radialaxis=dict(visible=True, range=[0, 10], color="rgba(255,255,255,0.5)")
+                      ),
+                      paper_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="white"),
+                      height=320,
+                      margin=dict(l=30, r=30, t=20, b=20)
+                    )
+                else:
+                    fig2 = go.Figure()
+                    fig2.add_trace(go.Scatter(
+                        x=problem_scores_sorted["run_date"],
+                        y=problem_scores_sorted["final_rank_score"].astype(float),
+                        mode="lines+markers",
+                        line=dict(color="#818cf8", width=3),
+                        marker=dict(size=8, color="#c084fc"),
+                        name="Final Rank Score"
+                    ))
+                    fig2.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="white"),
+                        height=320,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        xaxis=dict(showgrid=False, title="Run Date"),
+                        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)",
+                                   title="Score /100", range=[0, 100])
+                    )
                 st.plotly_chart(fig2, use_container_width=True,
                                 key=f"score_history_{problem_id}")
             else:
                 st.info("No score history available yet")
 
         # ── Evidence Posts ────────────────────────────────────────
-        st.markdown("##### 📋 Evidence Posts")
+        with st.expander("📋 Evidence Posts", expanded=False):
+            problem_evidence = pd.DataFrame()
+            if not evidence_df.empty and "problem_id" in evidence_df.columns:
+                problem_evidence = evidence_df[evidence_df["problem_id"] == problem_id].copy()
 
-        problem_evidence = pd.DataFrame()
-        if not evidence_df.empty and "problem_id" in evidence_df.columns:
-            problem_evidence = evidence_df[evidence_df["problem_id"] == problem_id].copy()
+            if not problem_evidence.empty and not posts_df.empty:
+                merged = problem_evidence.merge(
+                    posts_df, on="post_id", how="left", suffixes=("_ev", "_post")
+                )
+                if "upvotes" in merged.columns:
+                    merged = merged.sort_values("upvotes", ascending=False)
 
-        if not problem_evidence.empty and not posts_df.empty:
-            merged = problem_evidence.merge(
-                posts_df, on="post_id", how="left", suffixes=("_ev", "_post")
-            )
-            if "upvotes" in merged.columns:
-                merged = merged.sort_values("upvotes", ascending=False)
+                for _, ev_row in merged.iterrows():
+                    subreddit  = ev_row.get("subreddit",        "unknown")
+                    upvotes    = int(ev_row.get("upvotes",      0))
+                    post_date  = str(ev_row.get("post_created_date", ""))[:10]
+                    title      = html_lib.escape(str(ev_row.get("title", "Untitled")))
 
-            for _, ev_row in merged.iterrows():
-                subreddit  = ev_row.get("subreddit",        "unknown")
-                upvotes    = int(ev_row.get("upvotes",      0))
-                post_date  = str(ev_row.get("post_created_date", ""))[:10]
-                title      = str(ev_row.get("title",        "Untitled"))
+                    body_raw = str(ev_row.get("body", ""))
+                    body_raw = body_raw.replace("\n"," ").replace("\r"," ").replace("&#x200B;","").strip()
+                    body_raw = html_lib.unescape(body_raw)
+                    body_raw = re.sub(r" +", " ", body_raw)
+                    body_text = body_raw[:400] if len(body_raw) > 400 else body_raw
+                    body      = html_lib.escape(body_text)
 
-                body_raw = str(ev_row.get("body", ""))
-                body_raw = body_raw.replace("\n"," ").replace("\r"," ").replace("&#x200B;","").strip()
-                body_raw = html_lib.unescape(body_raw)
-                body_raw = re.sub(r" +", " ", body_raw)
-                body     = body_raw[:400] if len(body_raw) > 400 else body_raw
+                    top_comments   = str(ev_row.get("top_comments", ""))
+                    post_url       = ev_row.get("post_url", "")
+                    wtp_val        = int(ev_row.get("wtp_score", ev_row.get("wtp_score_ev", 0)) or 0)
+                    urgency        = str(ev_row.get("urgency_keywords", ev_row.get("urgency_keywords_ev", "")) or "")
+                    similarity_val = float(ev_row.get("similarity_score", 0) or 0)
+                    stars          = "★" * wtp_val + "☆" * (3 - wtp_val)
 
-                top_comments   = str(ev_row.get("top_comments", ""))
-                post_url       = ev_row.get("post_url", "")
-                wtp_val        = int(ev_row.get("wtp_score", ev_row.get("wtp_score_ev", 0)) or 0)
-                urgency        = str(ev_row.get("urgency_keywords", ev_row.get("urgency_keywords_ev", "")) or "")
-                similarity_val = float(ev_row.get("similarity_score", 0) or 0)
-                stars          = "★" * wtp_val + "☆" * (3 - wtp_val)
+                    urgency_html = f'<span style="font-size:0.75rem; color:rgba(255,255,255,0.35);">🔑 {html_lib.escape(urgency)}</span>' if urgency else ''
+                    safe_url = html_lib.escape(str(post_url), quote=True)
 
-                st.markdown(f"""
-                <div class="evidence-card">
-                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-                        <span class="sub-badge">r/{subreddit}</span>
-                        <span style="font-size:0.85rem; font-weight:700; color:#fb923c;
-                            background:rgba(251,146,60,0.12); border:1px solid rgba(251,146,60,0.25);
-                            border-radius:6px; padding:2px 8px;">⬆ {upvotes:,}</span>
-                        <span style="font-size:0.8rem; color:rgba(255,255,255,0.35);">{post_date}</span>
-                    </div>
-                    <div style="font-weight:600; color:#e2e8f0; margin-bottom:6px;">{title}</div>
-                    <div class="evidence-body">{body}</div>
-                    <div style="display:flex; gap:12px; align-items:center; margin-top:8px; flex-wrap:wrap;">
-                        <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">
-                            🎯 Match: <span style="color:#a78bfa; font-weight:600;">{similarity_val:.0%}</span>
-                        </span>
-                        <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">
-                            💰 WTP: <span style="color:#fbbf24; font-weight:600;">{wtp_val}/3</span> {stars}
-                        </span>
-                        {f'<span style="font-size:0.75rem; color:rgba(255,255,255,0.35);">🔑 {urgency}</span>' if urgency else ''}
-                    </div>
-                    <div style="margin-top:8px;">
-                        <a href="{post_url}" target="_blank" style="
-                            display:inline-block; margin-top:10px; padding:7px 18px;
-                            background:linear-gradient(135deg,rgba(255,69,0,0.18),rgba(255,69,0,0.08));
-                            color:#ff6b35; border:1px solid rgba(255,69,0,0.35); border-radius:8px;
-                            font-size:0.82rem; font-weight:600; text-decoration:none;
-                            letter-spacing:0.3px; transition:background 0.2s;">
-                            🔗 View on Reddit ↗
-                        </a>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    card_html = (
+                        '<div class="evidence-card">'
+                        '<div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">'
+                        f'<span class="sub-badge">r/{html_lib.escape(str(subreddit))}</span>'
+                        f'<span style="font-size:0.85rem; font-weight:700; color:#fb923c; background:rgba(251,146,60,0.12); border:1px solid rgba(251,146,60,0.25); border-radius:6px; padding:2px 8px;">⬆ {upvotes:,}</span>'
+                        f'<span style="font-size:0.8rem; color:rgba(255,255,255,0.35);">{post_date}</span>'
+                        '</div>'
+                        f'<div style="font-weight:600; color:#e2e8f0; margin-bottom:6px;">{title}</div>'
+                        f'<div class="evidence-body">{body}</div>'
+                        '<div style="display:flex; gap:12px; align-items:center; margin-top:8px; flex-wrap:wrap;">'
+                        f'<span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">🎯 Match: <span style="color:#a78bfa; font-weight:600;">{similarity_val:.0%}</span></span>'
+                        f'<span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">💰 WTP: <span style="color:#fbbf24; font-weight:600;">{wtp_val}/3</span> {stars}</span>'
+                        f'{urgency_html}'
+                        '</div>'
+                        f'<div style="margin-top:8px;"><a href="{safe_url}" target="_blank" style="display:inline-block; margin-top:10px; padding:7px 18px; background:linear-gradient(135deg,rgba(255,69,0,0.18),rgba(255,69,0,0.08)); color:#ff6b35; border:1px solid rgba(255,69,0,0.35); border-radius:8px; font-size:0.82rem; font-weight:600; text-decoration:none; letter-spacing:0.3px;">🔗 View on Reddit ↗</a></div>'
+                        '</div>'
+                    )
+                    st.markdown(card_html, unsafe_allow_html=True)
 
-                if top_comments and top_comments != "nan":
-                    comments_list = top_comments.split(" || ")
-                    with st.expander("💬 Top comments", expanded=False):
-                        for ci, comment in enumerate(comments_list):
-                            st.markdown(f"**Comment {ci+1}:** {comment}")
-        else:
-            st.info("No evidence posts linked to this problem")
+                    if top_comments and top_comments != "nan":
+                        comments_list = top_comments.split(" || ")
+                        with st.expander("💬 Top comments", expanded=False):
+                            for ci, comment in enumerate(comments_list):
+                                st.markdown(f"**Comment {ci+1}:** {comment}")
+            else:
+                st.info("No evidence posts linked to this problem")
 
         # ── Score History Table ───────────────────────────────────
         if not problem_scores.empty:
-            st.markdown("##### 📊 Score History Table")
-            display_cols = [
-                "run_date", "problem_acuteness", "customer_clarity", "market_size",
-                "competition", "good_ideaspace", "real_problem", "tarpit_risk",
-                "good_proxies", "total_score", "freshness_weight", "final_rank_score"
-            ]
-            available_cols = [c for c in display_cols if c in problem_scores.columns]
-            st.dataframe(
-                problem_scores[available_cols].sort_values("run_date", ascending=False),
-                use_container_width=True,
-                hide_index=True
-            )
+            with st.expander("📊 Score History Table", expanded=False):
+                display_cols = [
+                    "run_date", "wtp_score", "problem_acuteness", "customer_clarity", "market_size",
+                    "competition", "good_ideaspace", "real_problem", "tarpit_risk",
+                    "good_proxies", "total_score", "freshness_weight", "final_rank_score"
+                ]
+                available_cols = [c for c in display_cols if c in problem_scores.columns]
+                st.dataframe(
+                    problem_scores[available_cols].sort_values("run_date", ascending=False),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+        # ── Idea Evaluation Table ─────────────────────────────────
+        with st.expander("🧠 Idea Evaluation Table", expanded=False):
+            problem_eval = pd.DataFrame()
+            if not evaluations_df.empty and "problem_id" in evaluations_df.columns:
+                problem_eval = evaluations_df[
+                    evaluations_df["problem_id"] == problem_id
+                ].copy()
+
+            if not problem_eval.empty:
+                latest_eval = problem_eval.sort_values("run_date", ascending=False).iloc[0]
+                st.caption(f"Last evaluated: {latest_eval.get('run_date', '')}")
+                try:
+                    eval_data = json.loads(str(latest_eval.get("evaluation_json", "{}")))
+                except Exception:
+                    eval_data = {}
+
+                if eval_data:
+                    verdict_colors = {
+                        "PASS": ("#34d399", "rgba(52,211,153,0.08)", "rgba(52,211,153,0.35)"),
+                        "WARN": ("#fbbf24", "rgba(251,191,36,0.08)", "rgba(251,191,36,0.35)"),
+                        "FAIL": ("#f87171", "rgba(248,113,113,0.08)", "rgba(248,113,113,0.35)"),
+                    }
+                    rows_html = ""
+                    for dim in EVALUATION_DIMENSIONS:
+                        key      = dim["key"]
+                        dim_data = eval_data.get(key, {})
+                        verdict  = str(dim_data.get("verdict", "WARN")).upper()
+                        answer   = str(dim_data.get("answer", "No analysis available."))
+                        if verdict not in verdict_colors:
+                            verdict = "WARN"
+                        text_col, bg_col, border_col = verdict_colors[verdict]
+                        rows_html += f"""
+                        <tr style="background:{bg_col}; border-bottom:1px solid rgba(255,255,255,0.05);">
+                          <td style="padding:10px 14px; vertical-align:top; width:22%;">
+                            <div style="font-weight:700; color:#e2e8f0; font-size:0.83rem;">{dim['category']}</div>
+                            <div style="color:rgba(255,255,255,0.4); font-size:0.73rem; margin-top:2px;">{dim['question']}</div>
+                          </td>
+                          <td style="padding:10px 14px; vertical-align:middle; text-align:center; width:10%;">
+                            <span style="display:inline-block; padding:3px 12px; border-radius:20px;
+                              font-weight:700; font-size:0.72rem; letter-spacing:0.5px;
+                              color:{text_col}; background:rgba(0,0,0,0.2); border:1px solid {border_col};">
+                              {verdict}
+                            </span>
+                          </td>
+                          <td style="padding:10px 14px; vertical-align:top; color:rgba(255,255,255,0.78);
+                            font-size:0.83rem; line-height:1.55; width:68%;">{answer}</td>
+                        </tr>"""
+
+                    st.markdown(f"""
+                    <table style="width:100%; border-collapse:collapse; font-size:0.84rem;
+                      border:1px solid rgba(255,255,255,0.08); border-radius:8px; overflow:hidden;">
+                      <thead>
+                        <tr style="background:rgba(129,140,248,0.12);">
+                          <th style="padding:10px 14px; text-align:left; color:#a5b4fc;
+                            font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px;">Category</th>
+                          <th style="padding:10px 14px; text-align:center; color:#a5b4fc;
+                            font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px;">Verdict</th>
+                          <th style="padding:10px 14px; text-align:left; color:#a5b4fc;
+                            font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px;">Analysis</th>
+                        </tr>
+                      </thead>
+                      <tbody>{rows_html}</tbody>
+                    </table>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("No idea evaluation yet — run `python main.py` to generate.")
 
     st.markdown("")  # spacer between problems

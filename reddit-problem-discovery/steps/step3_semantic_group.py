@@ -21,6 +21,15 @@ from .utils import next_id
 SIMILARITY_THRESHOLD = 0.78
 
 
+def _normalize_date(date_str):
+    """Normalize dd-mm-yyyy to yyyy-mm-dd for proper sorting."""
+    date_str = str(date_str).strip()[:10]
+    parts = date_str.split('-')
+    if len(parts) == 3 and len(parts[0]) == 2 and len(parts[2]) == 4:
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    return date_str
+
+
 def _load_model():
     """Load sentence-transformers model with caching."""
     try:
@@ -221,11 +230,11 @@ def group_problems(filtered_posts, problem_ids_df, problem_evidence_df):
         if not evidence_for_problem.empty:
             dates = evidence_for_problem["post_created_date"].dropna()
             if not dates.empty:
-                problem_ids_df.at[idx, "last_seen_date"] = dates.max()
-                problem_ids_df.at[idx, "first_seen_date"] = min(
-                    str(row.get("first_seen_date", dates.min())),
-                    str(dates.min())
-                )
+                normalized_dates = dates.apply(_normalize_date)
+                problem_ids_df.at[idx, "last_seen_date"] = normalized_dates.max()
+                
+                current_first = _normalize_date(row.get("first_seen_date", normalized_dates.min()))
+                problem_ids_df.at[idx, "first_seen_date"] = min(current_first, normalized_dates.min())
 
     print(f"  -> {mapped_to_existing} posts mapped to existing problems")
     print(f"  -> {new_problems_created} new problems created")

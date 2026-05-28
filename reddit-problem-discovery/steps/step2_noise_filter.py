@@ -10,7 +10,14 @@ import json
 import os
 
 
-def filter_noise(posts, blocklist_path="config/noise_blocklist.json"):
+_DEFAULT_BLOCKLIST = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "noise_blocklist.json"
+)
+
+def filter_noise(posts, blocklist_path=None):
+    if blocklist_path is None:
+        blocklist_path = os.path.normpath(_DEFAULT_BLOCKLIST)
     """
     Filter posts using noise rules.
 

@@ -25,7 +25,7 @@ from steps.utils import (
 from steps.step1_scrape import scrape_reddit
 from steps.step2_noise_filter import filter_noise
 from steps.step3_semantic_group import group_problems
-from steps.step5_groq_score import score_with_groq
+from steps.step5_groq_score import score_with_groq, generate_idea_evaluation_table, IDEA_EVALUATION_COLUMNS
 
 
 # File paths
@@ -36,6 +36,7 @@ RAW_POSTS_PATH = os.path.join(DATA_DIR, "raw_posts.csv")
 PROBLEM_IDS_PATH = os.path.join(DATA_DIR, "problem_ids.csv")
 PROBLEM_EVIDENCE_PATH = os.path.join(DATA_DIR, "problem_evidence.csv")
 PROBLEM_SCORES_PATH = os.path.join(DATA_DIR, "problem_scores.csv")
+IDEA_EVALUATION_PATH = os.path.join(DATA_DIR, "idea_evaluation.csv")
 
 
 def main():
@@ -69,6 +70,7 @@ def main():
     problem_ids_df = load_csv(PROBLEM_IDS_PATH, PROBLEM_IDS_COLUMNS)
     problem_evidence_df = load_csv(PROBLEM_EVIDENCE_PATH, PROBLEM_EVIDENCE_COLUMNS)
     problem_scores_df = load_csv(PROBLEM_SCORES_PATH, PROBLEM_SCORES_COLUMNS)
+    idea_evaluation_df = load_csv(IDEA_EVALUATION_PATH, IDEA_EVALUATION_COLUMNS)
 
     existing_post_ids = get_existing_post_ids(raw_posts_df)
 
@@ -136,6 +138,14 @@ def main():
         save_csv(problem_ids_df, PROBLEM_IDS_PATH)
         print(f"  -> Saved to data/problem_scores.csv")
 
+        # ── Step 5: Idea Evaluation Table ──────────────────────
+        print(f"\n[Step 5] Generating idea evaluation tables...")
+        idea_evaluation_df = generate_idea_evaluation_table(
+            problem_ids_df, problem_evidence_df, raw_posts_df, idea_evaluation_df
+        )
+        save_csv(idea_evaluation_df, IDEA_EVALUATION_PATH)
+        print(f"  -> Saved to data/idea_evaluation.csv")
+
     except KeyboardInterrupt:
         print("\n\n[!] Pipeline interrupted by user. Saving data...")
     except Exception as e:
@@ -150,6 +160,7 @@ def main():
             save_csv(problem_ids_df, PROBLEM_IDS_PATH)
             save_csv(problem_evidence_df, PROBLEM_EVIDENCE_PATH)
             save_csv(problem_scores_df, PROBLEM_SCORES_PATH)
+            save_csv(idea_evaluation_df, IDEA_EVALUATION_PATH)
         except Exception as save_err:
             print(f"  [x] Error saving CSVs: {save_err}")
 

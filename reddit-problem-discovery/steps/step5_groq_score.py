@@ -21,7 +21,13 @@ def _calculate_freshness_weight(last_seen_date_str):
     try:
         if pd.isna(last_seen_date_str) or not last_seen_date_str:
             return 0.6
-        last_seen = datetime.strptime(str(last_seen_date_str)[:10], "%Y-%m-%d").date()
+        
+        date_str = str(last_seen_date_str)[:10]
+        try:
+            last_seen = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            last_seen = datetime.strptime(date_str, "%d-%m-%Y").date()
+            
         days_ago = (date.today() - last_seen).days
 
         if days_ago <= 7:
@@ -137,24 +143,42 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         evidence_text = "\n".join(evidence_texts)
 
         # Build Groq prompt
-        prompt = f"""You are a startup idea evaluator. Evaluate the following problem based on evidence from Reddit posts.
+        prompt = f"""You are a ruthless startup idea evaluator with deep knowledge of SaaS, 
+Indian markets, and B2B software. Evaluate this problem using ONLY the Reddit evidence 
+provided — no assumptions.
 
-Problem name: {problem_name}
+Problem: {problem_name}
 Industry: {industry}
 
-Evidence posts:
+Reddit Evidence:
 {evidence_text}
 
-Score each factor from 1–10. Return ONLY a JSON object with no explanation:
+Score each factor 1–10. Be harsh — most ideas score 3–6. Reserve 8–10 for exceptional signals.
+
+Scoring guide per factor:
+- problem_acuteness: How painful and frequent? Is it a daily bleeding wound (10) or occasional 
+  inconvenience (1)? Look for words like "nightmare", "wastes hours", "broken".
+- customer_clarity: How precisely defined is the buyer? Named job title + company type = 10. 
+  "anyone who..." = 1.
+- market_size: TAM signals. Global enterprise problem = 10. Hyper-niche one-country = 3.
+- competition: 10 = blue ocean, no direct tool exists. 1 = Salesforce already owns this space.
+- good_ideaspace: Is this a platform with 5+ expansion paths (10)? Or a one-trick widget (2)?
+- real_problem: Reddit posts describe a specific painful workflow = 10. Theoretical problem 
+  nobody posts about = 1.
+- tarpit_risk: 10 = nobody has tried this before. 1 = "blockchain for X" or "Uber for Y" 
+  that failed 50 times.
+- good_proxies: 10 = VC-backed companies in adjacent space proving the market. 1 = no comps exist.
+
+Return ONLY a JSON object, no explanation, no markdown:
 {{
-  "problem_acuteness": <1-10, how painful and frequent is this problem>,
-  "customer_clarity": <1-10, how clearly defined is the target customer>,
-  "market_size": <1-10, how large is the addressable market>,
-  "competition": <1-10, how low is existing competition — 10 means almost no competition>,
-  "good_ideaspace": <1-10, how promising is this SaaS category>,
-  "real_problem": <1-10, how real and validated is this problem>,
-  "tarpit_risk": <1-10, how low is the risk this is an unsolvable tarpit — 10 means not a tarpit>,
-  "good_proxies": <1-10, how many successful companies have proven adjacent ideas>
+  "problem_acuteness": <1-10>,
+  "customer_clarity": <1-10>,
+  "market_size": <1-10>,
+  "competition": <1-10>,
+  "good_ideaspace": <1-10>,
+  "real_problem": <1-10>,
+  "tarpit_risk": <1-10>,
+  "good_proxies": <1-10>
 }}"""
 
         # Call Groq API
@@ -193,10 +217,12 @@ Score each factor from 1–10. Return ONLY a JSON object with no explanation:
         # Update problem_ids_df
         problem_ids_df["latest_total_score"] = pd.to_numeric(problem_ids_df["latest_total_score"], errors="coerce")
         problem_ids_df["latest_final_rank_score"] = pd.to_numeric(problem_ids_df["latest_final_rank_score"], errors="coerce")
+        problem_ids_df["avg_wtp_score"] = pd.to_numeric(problem_ids_df.get("avg_wtp_score", 0), errors="coerce")
         pid_mask = problem_ids_df["problem_id"] == problem_id
         if pid_mask.any():
             problem_ids_df.loc[pid_mask, "latest_total_score"] = total_score
             problem_ids_df.loc[pid_mask, "latest_final_rank_score"] = final_rank_score
+            problem_ids_df.loc[pid_mask, "avg_wtp_score"] = wtp_score
 
         scored_count += 1
 
@@ -249,3 +275,195 @@ def _call_groq_for_scores(client, prompt):
                 return None
 
     return None
+
+
+# ── IDEA EVALUATION TABLE (new addition) ────────────────────────────────
+
+IDEA_EVALUATION_COLUMNS = ["id", "problem_id", "run_date", "evaluation_json"]
+
+EVALUATION_DIMENSIONS = [
+    {
+        "key": "problem_need",
+        "category": "Problem & Need (Acute Problem)",
+        "question": "Is it painful enough to pay for? Vitamin or Painkiller?"
+    },
+    {
+        "key": "customer_clarity",
+        "category": "Customer Clarity",
+        "question": "Can the target user be clearly described? Do they have WTP now?"
+    },
+    {
+        "key": "market_size",
+        "category": "Market Size (Enough?)",
+        "question": "Are people searching for this? Is the market growing and large enough?"
+    },
+    {
+        "key": "competition",
+        "category": "Competition",
+        "question": "Who are competitors? Why will customers choose this over them?"
+    },
+    {
+        "key": "demand_validation",
+        "category": "Do People Want This?",
+        "question": "Are there organic demand signals, workarounds, or communities proving demand?"
+    },
+    {
+        "key": "recently_possible",
+        "category": "Recently Possible",
+        "question": "What tech, behavior, or market shift makes this possible or urgent now?"
+    },
+    {
+        "key": "good_proxies",
+        "category": "Good Proxies",
+        "question": "Have adjacent companies proven this market? Strong demand proxies exist?"
+    },
+    {
+        "key": "ideaspace",
+        "category": "Good Ideaspace",
+        "question": "Strong SaaS category with multiple expansion paths, or single narrow feature?"
+    },
+    {
+        "key": "real_problem",
+        "category": "Is It a Real Problem?",
+        "question": "Genuine validated problem or a solution searching for a problem?"
+    },
+    {
+        "key": "tarpit_risk",
+        "category": "Tarpit Idea",
+        "question": "Have many tried and failed here? Why would this attempt succeed?"
+    }
+]
+
+
+def generate_idea_evaluation_table(
+    problem_ids_df, problem_evidence_df, raw_posts_df, idea_evaluation_df
+):
+    """
+    NEW: Generate a 10-dimension qualitative evaluation table for each problem using Groq.
+    Saves results as JSON string to idea_evaluation.csv.
+    Runs after score_with_groq() — qualifies problems with evidence_count >= 1.
+    Skips problems already evaluated today.
+    """
+    from groq import Groq
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    today = date.today().isoformat()
+
+    qualifying = problem_ids_df[
+        problem_ids_df["evidence_count"].astype(float) >= 1
+    ].copy()
+
+    if not idea_evaluation_df.empty and "problem_id" in idea_evaluation_df.columns:
+        evaluated_today = idea_evaluation_df[
+            idea_evaluation_df["run_date"].astype(str) == today
+        ]["problem_id"].tolist()
+        qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_today)]
+
+    if qualifying.empty:
+        print("  -> No problems qualify for idea evaluation (already done today or no evidence)")
+        return idea_evaluation_df
+
+    print(f"  -> {len(qualifying)} problems queued for idea evaluation table")
+
+    for i, (idx, problem) in enumerate(qualifying.iterrows()):
+        problem_id   = problem["problem_id"]
+        problem_name = problem["problem_name"]
+        industry     = problem["industry"]
+
+        print(f"  -> Evaluating {i+1}/{len(qualifying)}: \"{problem_name}\"")
+
+        evidence_rows     = problem_evidence_df[problem_evidence_df["problem_id"] == problem_id]
+        evidence_post_ids = evidence_rows["post_id"].astype(str).tolist()
+        evidence_posts    = raw_posts_df[raw_posts_df["post_id"].astype(str).isin(evidence_post_ids)]
+
+        evidence_texts, total_chars = [], 0
+        for _, post in evidence_posts.iterrows():
+            text = f"Title: {post['title']}\nBody: {str(post['body'])[:300]}\n---"
+            if total_chars + len(text) > 3000:
+                break
+            evidence_texts.append(text)
+            total_chars += len(text)
+        evidence_text = "\n".join(evidence_texts)
+
+        dim_lines = "\n".join(
+            f"{j+1}. {d['category']}: {d['question']}"
+            for j, d in enumerate(EVALUATION_DIMENSIONS)
+        )
+        json_template = "\n".join(
+            f'  "{d["key"]}": {{"verdict": "PASS or WARN or FAIL", "answer": "2-4 sentence specific analysis"}}'
+            for d in EVALUATION_DIMENSIONS
+        )
+
+        prompt = f"""You are a ruthless startup idea evaluator. Evaluate this problem across 
+10 dimensions using the Reddit evidence below as your primary signal.
+
+Problem: {problem_name}
+Industry: {industry}
+
+Reddit Evidence:
+{evidence_text}
+
+Dimensions to evaluate:
+{dim_lines}
+
+For each dimension return:
+- verdict: "PASS" (strong positive), "WARN" (mixed/uncertain), or "FAIL" (clear red flag)
+- answer: 2-4 specific opinionated sentences referencing the Reddit evidence where possible.
+  Be direct. No hedging. Call out exact failure modes or strengths.
+
+Return ONLY valid JSON, no markdown, no preamble:
+{{
+{json_template}
+}}"""
+
+        evaluation = None
+        for attempt in range(2):
+            try:
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.15,
+                    max_tokens=1200
+                )
+                content = response.choices[0].message.content.strip()
+                if "```" in content:
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                    content = content.strip()
+                evaluation = json.loads(content)
+                valid = {"PASS", "WARN", "FAIL"}
+                for d in EVALUATION_DIMENSIONS:
+                    k = d["key"]
+                    if k in evaluation and isinstance(evaluation[k], dict):
+                        v = str(evaluation[k].get("verdict", "WARN")).upper()
+                        evaluation[k]["verdict"] = v if v in valid else "WARN"
+                break
+            except Exception as e:
+                if attempt == 0:
+                    print(f"  [!] Retrying evaluation for \"{problem_name}\": {e}")
+                    time.sleep(1)
+                else:
+                    print(f"  [x] Evaluation failed for \"{problem_name}\"")
+
+        if evaluation is None:
+            continue
+
+        existing_ids = pd.to_numeric(
+            idea_evaluation_df.get("id", pd.Series()), errors="coerce"
+        ).dropna()
+        new_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
+
+        idea_evaluation_df = pd.concat([
+            idea_evaluation_df,
+            pd.DataFrame([{
+                "id": new_id,
+                "problem_id": problem_id,
+                "run_date": today,
+                "evaluation_json": json.dumps(evaluation)
+            }])
+        ], ignore_index=True)
+
+        time.sleep(0.5)
+
+    return idea_evaluation_df
+

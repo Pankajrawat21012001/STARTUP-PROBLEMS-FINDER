@@ -11,10 +11,15 @@ def load_csv(filepath, columns):
     if os.path.exists(filepath):
         try:
             df = pd.read_csv(filepath, encoding="utf-8")
-            # Verify columns match — if corrupted, recreate
-            if list(df.columns) != columns:
-                print(f"  [!] Column mismatch in {filepath}, recreating with correct schema")
-                df = pd.DataFrame(columns=columns)
+            # Handle missing columns gracefully instead of wiping data
+            missing_cols = [col for col in columns if col not in df.columns]
+            if missing_cols:
+                for col in missing_cols:
+                    df[col] = None
+                print(f"  [+] Added missing columns to {filepath}: {missing_cols}")
+            
+            # Reorder columns to match the expected schema
+            df = df[columns]
             return df
         except Exception as e:
             print(f"  [!] Error reading {filepath}: {e}")
