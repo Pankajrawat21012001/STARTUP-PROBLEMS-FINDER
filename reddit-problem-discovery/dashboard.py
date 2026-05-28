@@ -28,6 +28,8 @@ PROBLEM_EVIDENCE_PATH = os.path.join(DATA_DIR, "problem_evidence.csv")
 PROBLEM_SCORES_PATH = os.path.join(DATA_DIR, "problem_scores.csv")
 RAW_POSTS_PATH      = os.path.join(DATA_DIR, "raw_posts.csv")
 IDEA_EVALUATION_PATH = os.path.join(DATA_DIR, "idea_evaluation.csv")
+IDEA_REVIEWS_PATH = os.path.join(DATA_DIR, "idea_reviews.csv")
+IDEA_REVIEWS_COLUMNS = ["problem_id", "status", "reason", "notes", "reviewed_at"]
 
 EVALUATION_DIMENSIONS = [
     {"key": "problem_need",      "category": "Problem & Need (Acute Problem)",  "question": "Vitamin or Painkiller? Painful enough to pay for?"},
@@ -98,6 +100,32 @@ def load_data():
         else:
             dfs[name] = pd.DataFrame()
     return dfs
+
+
+def load_reviews():
+    if os.path.exists(IDEA_REVIEWS_PATH):
+        try:
+            df = pd.read_csv(IDEA_REVIEWS_PATH)
+            for col in IDEA_REVIEWS_COLUMNS:
+                if col not in df.columns:
+                    df[col] = ""
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=IDEA_REVIEWS_COLUMNS)
+
+def save_review(problem_id, status, reason="", notes=""):
+    df = load_reviews()
+    df = df[df["problem_id"] != problem_id]  # remove old entry for this problem
+    new_row = pd.DataFrame([{
+        "problem_id": problem_id,
+        "status": status,
+        "reason": reason,
+        "notes": notes,
+        "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(IDEA_REVIEWS_PATH, index=False)
 
 
 @st.cache_data(ttl=60)
@@ -498,6 +526,14 @@ with st.sidebar:
 
     # Top N
     top_n = int(st.number_input("Show Top N", min_value=1, value=10, step=1))
+
+    st.markdown("---")
+    st.markdown("### 🗂️ Review Filter")
+    review_filter = st.multiselect(
+        "Show by Review Status",
+        options=["Unreviewed", "Accepted", "Hold", "Rejected"],
+        default=["Unreviewed", "Accepted", "Hold"]
+    )
     
     # st.markdown("---")🎯 Filters
 
@@ -532,6 +568,20 @@ filtered_df = filtered_df[filtered_df["evidence_count"]           >= min_evidenc
 filtered_df = filtered_df[filtered_df["avg_wtp_score"]            >= min_wtp]
 filtered_df = filtered_df[filtered_df["latest_total_score"]       >= min_llm]
 filtered_df = filtered_df[filtered_df["latest_final_rank_score"]  >= min_final]
+
+# Apply review filter
+reviews_df = load_reviews()
+
+def get_review_status(problem_id):
+    if reviews_df.empty:
+        return "Unreviewed"
+    match = reviews_df[reviews_df["problem_id"] == problem_id]
+    if match.empty:
+        return "Unreviewed"
+    return str(match.iloc[-1]["status"])
+
+filtered_df["_review_status"] = filtered_df["problem_id"].apply(get_review_status)
+filtered_df = filtered_df[filtered_df["_review_status"].isin(review_filter)]
 
 # Sort
 if sort_by in filtered_df.columns:
@@ -599,6 +649,89 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
 
     # Expandable detail
     with st.expander(f"📊 Details — {problem_name}", expanded=(len(filtered_df) == 1)):
+
+        # ── Manual Review ─────────────────────────────────────────
+        st.markdown("##### ✅ Manual Review")
+
+        current_status = get_review_status(problem_id)
+        current_reason = ""
+        current_notes = ""
+        if not reviews_df.empty:
+            match = reviews_df[reviews_df["problem_id"] == problem_id]
+            if not match.empty:
+                val_r = match.iloc[-1].get("reason", "")
+                if pd.notna(val_r) and str(val_r).strip().lower() != "nan":
+                    current_reason = str(val_r)
+                val_n = match.iloc[-1].get("notes", "")
+                if pd.notna(val_n) and str(val_n).strip().lower() != "nan":
+                    current_notes = str(val_n)
+
+        status_colors = {
+            "Accepted": "#34d399", "Hold": "#fbbf24",
+            "Rejected": "#f87171", "Unreviewed": "#94a3b8"
+        }
+        status_color = status_colors.get(current_status, "#94a3b8")
+
+        rev_col1, rev_col2, rev_col3 = st.columns([1.5, 2.5, 3.8])
+
+        with rev_col1:
+            st.markdown("<div style='padding-top: 5px;'>", unsafe_allow_html=True)
+            st.markdown(
+                f'<span style="font-size:0.85rem; font-weight:700; color:{status_color}; '
+                f'background:rgba(255,255,255,0.06); border:1px solid {status_color}44; '
+                f'border-radius:20px; padding:6px 14px; display:inline-block;">Current: {current_status}</span>',
+                unsafe_allow_html=True
+            )
+            if current_reason:
+                st.markdown(f"<div style='font-size:0.75rem; color:rgba(255,255,255,0.5); margin-top:8px;'>📝 Reason: {current_reason}</div>", unsafe_allow_html=True)
+            if current_notes:
+                st.markdown(f"<div style='font-size:0.75rem; color:rgba(255,255,255,0.4); margin-top:4px;'>📌 Notes: {current_notes}</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with rev_col2:
+            reason_input = st.text_input(
+                "Reason (optional)",
+                value=current_reason,
+                key=f"reason_{problem_id}",
+                placeholder="Reason (e.g. Market size...)",
+                label_visibility="collapsed"
+            )
+            notes_input = st.text_input(
+                "Notes (optional)",
+                value=current_notes,
+                key=f"notes_{problem_id}",
+                placeholder="Additional notes / comments...",
+                label_visibility="collapsed"
+            )
+
+        with rev_col3:
+            st.markdown("<div style='padding-top: 15px;'>", unsafe_allow_html=True)
+            btn_sub1, btn_sub2, btn_sub3, btn_sub4 = st.columns([1, 1, 1, 1.2])
+            with btn_sub1:
+                if st.button("✅ Accept", key=f"accept_{problem_id}"):
+                    save_review(problem_id, "Accepted", reason_input, notes_input)
+                    st.cache_data.clear()
+                    st.rerun()
+            with btn_sub2:
+                if st.button("⏸️ Hold", key=f"hold_{problem_id}"):
+                    save_review(problem_id, "Hold", reason_input, notes_input)
+                    st.cache_data.clear()
+                    st.rerun()
+            with btn_sub3:
+                if st.button("❌ Reject", key=f"reject_{problem_id}"):
+                    save_review(problem_id, "Rejected", reason_input, notes_input)
+                    st.cache_data.clear()
+                    st.rerun()
+            with btn_sub4:
+                if st.button("🔄 Reset", key=f"reset_{problem_id}", help="Remove review vote and set to Unreviewed"):
+                    df = load_reviews()
+                    df = df[df["problem_id"] != problem_id]
+                    df.to_csv(IDEA_REVIEWS_PATH, index=False)
+                    st.cache_data.clear()
+                    st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("---")
 
         # Load scores for this problem (shared by both columns)
         problem_scores = pd.DataFrame()

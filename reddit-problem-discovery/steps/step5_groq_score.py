@@ -98,6 +98,17 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         problem_ids_df["evidence_count"].astype(float) >= 1
     ].copy()
 
+    # Skip problems manually rejected in the dashboard
+    reviews_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "data", "idea_reviews.csv")
+    if os.path.exists(reviews_path):
+        try:
+            reviews = pd.read_csv(reviews_path)
+            rejected_ids = reviews[reviews["status"] == "Rejected"]["problem_id"].tolist()
+            qualifying = qualifying[~qualifying["problem_id"].isin(rejected_ids)]
+        except Exception:
+            pass
+
     # Exclude problems already scored today
     if not problem_scores_df.empty:
         scored_today = problem_scores_df[
@@ -134,7 +145,7 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         evidence_texts = []
         total_chars = 0
         for _, post in evidence_posts.iterrows():
-            text = f"Title: {post['title']}\nBody: {str(post['body'])[:300]}\n---"
+            text = f"Title: {post['title']}\nBody: {str(post['body'])[:600]}\n---"
             if total_chars + len(text) > 3000:
                 break
             evidence_texts.append(text)
@@ -143,43 +154,59 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         evidence_text = "\n".join(evidence_texts)
 
         # Build Groq prompt
-        prompt = f"""You are a ruthless startup idea evaluator with deep knowledge of SaaS, 
-Indian markets, and B2B software. Evaluate this problem using ONLY the Reddit evidence 
-provided — no assumptions.
+        prompt = f"""You are a ruthless, skeptical startup idea evaluator. Your job is to KILL bad ideas.
+                    Most problems score 3-5. Only award 7+ if there is EXPLICIT evidence in the Reddit posts below.
 
-Problem: {problem_name}
-Industry: {industry}
+                    Problem: {problem_name}
+                    Industry: {industry}
 
-Reddit Evidence:
-{evidence_text}
+                    Reddit Evidence ({len(evidence_texts)} posts):
+                    {evidence_text}
 
-Score each factor 1–10. Be harsh — most ideas score 3–6. Reserve 8–10 for exceptional signals.
+                    SCORING RULES — be harsh:
+                    - Base every score on WHAT IS ACTUALLY WRITTEN in the evidence above.
+                    - If you cannot find direct evidence for a high score, score it LOW (3-4).
+                    - Do not invent signals that are not in the text.
+                    - A single Reddit post with under 20 upvotes = very weak signal. Score accordingly.
+                    - Generic complaints like "this is hard" = 3. Specific workflow + dollar value + frequency = 8+.
 
-Scoring guide per factor:
-- problem_acuteness: How painful and frequent? Is it a daily bleeding wound (10) or occasional 
-  inconvenience (1)? Look for words like "nightmare", "wastes hours", "broken".
-- customer_clarity: How precisely defined is the buyer? Named job title + company type = 10. 
-  "anyone who..." = 1.
-- market_size: TAM signals. Global enterprise problem = 10. Hyper-niche one-country = 3.
-- competition: 10 = blue ocean, no direct tool exists. 1 = Salesforce already owns this space.
-- good_ideaspace: Is this a platform with 5+ expansion paths (10)? Or a one-trick widget (2)?
-- real_problem: Reddit posts describe a specific painful workflow = 10. Theoretical problem 
-  nobody posts about = 1.
-- tarpit_risk: 10 = nobody has tried this before. 1 = "blockchain for X" or "Uber for Y" 
-  that failed 50 times.
-- good_proxies: 10 = VC-backed companies in adjacent space proving the market. 1 = no comps exist.
+                    Factor-by-factor guide:
+                    - problem_acuteness (1-10): Daily bleeding wound vs occasional annoyance.
+                    EVIDENCE REQUIRED: words like "every day", "waste hours weekly", "nightmare", specific time lost.
+                    1 post with vague complaint = max 4. Multiple posts with specific workflows = 7+.
+                    
+                    - customer_clarity (1-10): Can you name the buyer's exact job title AND company type?
+                    "renters in Bangalore" = 3 (huge segment, no B2B clarity). "GST-registered freelance
+                    consultants in India billing US clients" = 9.
 
-Return ONLY a JSON object, no explanation, no markdown:
-{{
-  "problem_acuteness": <1-10>,
-  "customer_clarity": <1-10>,
-  "market_size": <1-10>,
-  "competition": <1-10>,
-  "good_ideaspace": <1-10>,
-  "real_problem": <1-10>,
-  "tarpit_risk": <1-10>,
-  "good_proxies": <1-10>
-}}"""
+                    - market_size (1-10): TAM signals. India city-specific = max 4. India-wide B2B = 6.
+                    Global SaaS market = 8+. Only score 9-10 with explicit market references.
+
+                    - competition (1-10): 10 = truly no tool exists. 5 = weak tools exist. 1 = Salesforce owns this.
+                    If evidence doesn't mention existing tools AT ALL, default to 5 (unknown, not blue ocean).
+
+                    - good_ideaspace (1-10): Platform with 5+ expansion paths = 8+. Single narrow feature = 2.
+
+                    - real_problem (1-10): Specific Reddit workflow described = 8. "Someone should build X" = 4.
+                    Emotional venting without workflow details = 3.
+
+                    - tarpit_risk (1-10): 10 = genuinely novel. 1 = "blockchain + X" or idea pitched 1000 times.
+                    If you don't have strong evidence of novelty, default 5.
+
+                    - good_proxies (1-10): Named VC-backed adjacent companies = 8+. Vague "companies exist" = 4.
+                    No named proxies in evidence = 3.
+
+                    Return ONLY a JSON object, no explanation, no markdown:
+                    {{
+                    "problem_acuteness": <1-10>,
+                    "customer_clarity": <1-10>,
+                    "market_size": <1-10>,
+                    "competition": <1-10>,
+                    "good_ideaspace": <1-10>,
+                    "real_problem": <1-10>,
+                    "tarpit_risk": <1-10>,
+                    "good_proxies": <1-10>
+                    }}"""
 
         # Call Groq API
         wtp_score = _compute_wtp_score(evidence_posts)
@@ -352,6 +379,17 @@ def generate_idea_evaluation_table(
         problem_ids_df["evidence_count"].astype(float) >= 1
     ].copy()
 
+    # Skip problems manually rejected in the dashboard
+    reviews_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "data", "idea_reviews.csv")
+    if os.path.exists(reviews_path):
+        try:
+            reviews = pd.read_csv(reviews_path)
+            rejected_ids = reviews[reviews["status"] == "Rejected"]["problem_id"].tolist()
+            qualifying = qualifying[~qualifying["problem_id"].isin(rejected_ids)]
+        except Exception:
+            pass
+
     if not idea_evaluation_df.empty and "problem_id" in idea_evaluation_df.columns:
         evaluated_today = idea_evaluation_df[
             idea_evaluation_df["run_date"].astype(str) == today
@@ -377,7 +415,7 @@ def generate_idea_evaluation_table(
 
         evidence_texts, total_chars = [], 0
         for _, post in evidence_posts.iterrows():
-            text = f"Title: {post['title']}\nBody: {str(post['body'])[:300]}\n---"
+            text = f"Title: {post['title']}\nBody: {str(post['body'])[:600]}\n---"
             if total_chars + len(text) > 3000:
                 break
             evidence_texts.append(text)
@@ -422,7 +460,7 @@ Return ONLY valid JSON, no markdown, no preamble:
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.15,
-                    max_tokens=1200
+                    max_tokens=2000
                 )
                 content = response.choices[0].message.content.strip()
                 if "```" in content:
