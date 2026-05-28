@@ -89,8 +89,7 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
 
     # Find qualifying problems
     qualifying = problem_ids_df[
-        (problem_ids_df["evidence_count"].astype(float) >= 3) &
-        (problem_ids_df["avg_wtp_score"].astype(float) >= 1.0)
+        problem_ids_df["evidence_count"].astype(float) >= 1
     ].copy()
 
     # Exclude problems already scored today
@@ -101,10 +100,10 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         qualifying = qualifying[~qualifying["problem_id"].isin(scored_today)]
 
     if qualifying.empty:
-        print("  -> No problems qualify for scoring (need evidence >= 3 and WTP >= 1.0)")
+        print("  -> No problems qualify for scoring (need evidence >= 1)")
         return problem_ids_df, problem_scores_df
 
-    print(f"  -> {len(qualifying)} problems qualify for scoring (evidence >= 3, WTP >= 1.0)")
+    print(f"  -> {len(qualifying)} problems qualify for scoring (evidence >= 1)")
 
     scored_count = 0
 
@@ -192,10 +191,12 @@ Score each factor from 1–10. Return ONLY a JSON object with no explanation:
         )
 
         # Update problem_ids_df
-        pid_idx = problem_ids_df[problem_ids_df["problem_id"] == problem_id].index
-        if len(pid_idx) > 0:
-            problem_ids_df.at[pid_idx[0], "latest_total_score"] = total_score
-            problem_ids_df.at[pid_idx[0], "latest_final_rank_score"] = final_rank_score
+        problem_ids_df["latest_total_score"] = pd.to_numeric(problem_ids_df["latest_total_score"], errors="coerce")
+        problem_ids_df["latest_final_rank_score"] = pd.to_numeric(problem_ids_df["latest_final_rank_score"], errors="coerce")
+        pid_mask = problem_ids_df["problem_id"] == problem_id
+        if pid_mask.any():
+            problem_ids_df.loc[pid_mask, "latest_total_score"] = total_score
+            problem_ids_df.loc[pid_mask, "latest_final_rank_score"] = final_rank_score
 
         scored_count += 1
 

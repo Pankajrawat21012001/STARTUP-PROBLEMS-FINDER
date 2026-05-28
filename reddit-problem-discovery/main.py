@@ -51,6 +51,11 @@ def main():
     load_dotenv(env_path)
 
     # Verify API keys are set
+    if not os.getenv("SCRAPER_API_KEY") or os.getenv("SCRAPER_API_KEY") == "your_scraperapi_key":
+        print("\n[x] ERROR: Please set your ScraperAPI key in .env file")
+        print("  Get key at: https://dashboard.scraperapi.com")
+        sys.exit(1)
+
     if not os.getenv("GROQ_API_KEY") or os.getenv("GROQ_API_KEY") == "your_groq_api_key":
         print("\n[x] ERROR: Please set your Groq API key in .env file")
         print("  Get key at: https://console.groq.com")
