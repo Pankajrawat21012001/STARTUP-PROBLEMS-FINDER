@@ -270,8 +270,8 @@ def build_export_data(problem, problem_scores, eval_data, notes_df, reviews_df, 
                   "good_ideaspace","real_problem","tarpit_risk","good_proxies"]:
             scores[k] = float(latest.get(k, 0) or 0)
 
-    # Generate Plotly Chart static image
-    chart_png = generate_plotly_chart_image(problem_scores)
+    # Generate Plotly Chart static image (removed eager call for performance; called lazily instead)
+    chart_png = None
 
     # Extract linked evidence posts from Reddit
     evidence_posts = []
@@ -1179,10 +1179,24 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
         )
 
         # ── Premium Header Action Bar ──
-        action_col1, action_col2, action_col3 = st.columns([5.5, 2.25, 2.25])
-        with action_col1:
-            st.markdown(f"<div style='padding-top:6px; font-size:0.85rem; font-weight:800; color:#a5b4fc; letter-spacing:0.8px;'>📋 PROBLEM DISCOVERY & AI ANALYSIS REPORT</div>", unsafe_allow_html=True)
-        with action_col2:
+        gen_key = f"gen_export_{problem_id}"
+        if gen_key not in st.session_state:
+            st.session_state[gen_key] = False
+
+        if not st.session_state[gen_key]:
+            action_col1, action_col2 = st.columns([5.5, 4.5])
+            with action_col1:
+                st.markdown(f"<div style='padding-top:6px; font-size:0.85rem; font-weight:800; color:#a5b4fc; letter-spacing:0.8px;'>📋 PROBLEM DISCOVERY & AI ANALYSIS REPORT</div>", unsafe_allow_html=True)
+            with action_col2:
+                if st.button("⚙️ Generate PDF/PPTX Reports", key=f"gen_{problem_id}", width="stretch"):
+                    st.session_state[gen_key] = True
+                    st.rerun()
+            st.caption("💡 Click 'Generate PDF/PPTX Reports' to prepare PDF and PPTX exports on demand.")
+        else:
+            # Generate the chart PNG lazily only when button is clicked!
+            chart_png = generate_plotly_chart_image(problem_scores_exp)
+            export_data["chart_png"] = chart_png
+            
             pdf_bytes = b""
             try:
                 pdf_bytes = export_as_pdf(export_data)
@@ -1190,20 +1204,7 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                 import traceback
                 print(f"Error generating PDF for {problem_name}: {e}")
                 traceback.print_exc()
-            
-            if pdf_bytes:
-                st.download_button(
-                    label="📄 PDF Report",
-                    data=pdf_bytes,
-                    file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pdf",
-                    mime="application/pdf",
-                    key=f"pdf_{problem_id}",
-                    width="stretch"
-                )
-            else:
-                st.button("📄 PDF (Failed to generate)", key=f"pdf_failed_{problem_id}", disabled=True, width="stretch")
-                
-        with action_col3:
+
             pptx_bytes = b""
             try:
                 pptx_bytes = export_as_pptx(export_data)
@@ -1211,18 +1212,34 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                 import traceback
                 print(f"Error generating PPTX for {problem_name}: {e}")
                 traceback.print_exc()
-                
-            if pptx_bytes:
-                st.download_button(
-                    label="📊 PPTX Deck",
-                    data=pptx_bytes,
-                    file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    key=f"pptx_{problem_id}",
-                    width="stretch"
-                )
-            else:
-                st.button("📊 PPTX (Failed to generate)", key=f"pptx_failed_{problem_id}", disabled=True, width="stretch")
+
+            action_col1, action_col2, action_col3 = st.columns([5.5, 2.25, 2.25])
+            with action_col1:
+                st.markdown(f"<div style='padding-top:6px; font-size:0.85rem; font-weight:800; color:#a5b4fc; letter-spacing:0.8px;'>📋 REPORTS GENERATED</div>", unsafe_allow_html=True)
+            with action_col2:
+                if pdf_bytes:
+                    st.download_button(
+                        label="📄 PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pdf",
+                        mime="application/pdf",
+                        key=f"pdf_{problem_id}",
+                        width="stretch"
+                    )
+                else:
+                    st.button("📄 PDF (Failed to generate)", key=f"pdf_failed_{problem_id}", disabled=True, width="stretch")
+            with action_col3:
+                if pptx_bytes:
+                    st.download_button(
+                        label="📊 PPTX Deck",
+                        data=pptx_bytes,
+                        file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        key=f"pptx_{problem_id}",
+                        width="stretch"
+                    )
+                else:
+                    st.button("📊 PPTX (Failed to generate)", key=f"pptx_failed_{problem_id}", disabled=True, width="stretch")
         st.markdown("<hr style='margin: 12px 0 16px 0; border: none; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
 
         # ── Manual Review ─────────────────────────────────────────
