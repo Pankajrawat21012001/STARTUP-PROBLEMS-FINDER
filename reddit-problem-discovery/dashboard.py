@@ -12,6 +12,11 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime
+import io
+from fpdf import FPDF
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
 
 # ── Page Config ──────────────────────────────────────────────────
 st.set_page_config(
@@ -126,6 +131,443 @@ def save_review(problem_id, status, reason="", notes=""):
     }])
     df = pd.concat([df, new_row], ignore_index=True)
     df.to_csv(IDEA_REVIEWS_PATH, index=False)
+
+
+def load_notes():
+    """Load notes from manual reviews DataFrame to match expected notes schema."""
+    reviews = load_reviews()
+    if not reviews.empty and "notes" in reviews.columns:
+        notes_df = reviews.rename(columns={"notes": "note"})
+        return notes_df
+    return pd.DataFrame(columns=["problem_id", "note"])
+
+
+def clean_pdf_text(text):
+    """Clean text for FPDF Helvetica: remove emojis and encode/decode to latin-1."""
+    if not text:
+        return ""
+    # Remove emojis and high-unicode characters
+    text = re.sub(r'[^\x00-\x7F\x80-\xFF]', '', text)
+    # Replace common unicode quotes and dashes with latin-1 equivalents
+    replacements = {
+        '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
+        '\u2013': '-', '\u2014': '-', '\u2022': '*', '\u2192': '->',
+        '\u23f1': '', '\u2b50': '*', '\U0001f310': '', '\u2714': '[PASS]',
+        '\u26a0': '[WARN]', '\u274c': '[FAIL]', '⏱️': '', '🟢': '',
+        '🟡': '', '🟠': '', '🔴': '', '⬆': '', '🎯': '', '💰': '',
+        '📝': '', '🧠': '', '📋': '', '📊': '', '💬': '',
+        '✅': '', '⏸️': '', '❌': '', '🔄': '', '📌': '', '💡': ''
+    }
+    for orig, rep in replacements.items():
+        text = text.replace(orig, rep)
+    
+    # Encode to latin-1, ignoring non-latin-1 characters
+    try:
+        return text.encode('latin-1', 'ignore').decode('latin-1')
+    except Exception:
+        return "".join(c for c in text if ord(c) < 256)
+
+
+def clean_pptx_text(text):
+    """Clean text for PPTX: remove emojis and keep standard unicode."""
+    if not text:
+        return ""
+    replacements = {
+        '⏱️': '', '🟢': '', '🟡': '', '🟠': '', '🔴': '', '⬆': '',
+        '🎯': '', '💰': '', '📝': '', '🧠': '', '📋': '', '📊': '',
+        '💬': '', '✅': '', '⏸️': '', '❌': '', '🔄': '', '📌': '', '💡': ''
+    }
+    for orig, rep in replacements.items():
+        text = text.replace(orig, rep)
+    return text
+
+
+def generate_plotly_chart_image(problem_scores):
+    """Generate the Plotly chart as PNG bytes."""
+    if problem_scores.empty:
+        return None
+    try:
+        problem_scores_sorted = problem_scores.sort_values("run_date")
+        
+        if len(problem_scores_sorted) == 1:
+            latest = problem_scores_sorted.iloc[0]
+            categories = ["Acuteness", "Clarity", "Market Size", "Competition", "Ideaspace", "Real Problem", "Tarpit Risk", "Proxies"]
+            values = [float(latest.get(k,0)) for k in ["problem_acuteness", "customer_clarity", "market_size", "competition", "good_ideaspace", "real_problem", "tarpit_risk", "good_proxies"]]
+            
+            fig = go.Figure(data=go.Scatterpolar(
+              r=values + [values[0]],
+              theta=categories + [categories[0]],
+              fill='toself',
+              line=dict(color="#818cf8"),
+              marker=dict(color="#c084fc")
+            ))
+            fig.update_layout(
+              polar=dict(
+                radialaxis=dict(visible=True, range=[0, 10], color="rgba(0,0,0,0.6)")
+              ),
+              paper_bgcolor="rgba(255,255,255,1)",
+              font=dict(color="black", size=11),
+              height=320,
+              width=450,
+              margin=dict(l=40, r=40, t=20, b=20)
+            )
+        else:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=problem_scores_sorted["run_date"],
+                y=problem_scores_sorted["final_rank_score"].astype(float),
+                mode="lines+markers",
+                line=dict(color="#818cf8", width=3),
+                marker=dict(size=8, color="#c084fc"),
+                name="Final Rank Score"
+            ))
+            fig.update_layout(
+                paper_bgcolor="rgba(255,255,255,1)",
+                plot_bgcolor="rgba(240,240,240,0.5)",
+                font=dict(color="black", size=11),
+                height=320,
+                width=550,
+                margin=dict(l=40, r=40, t=20, b=20),
+                xaxis=dict(showgrid=True, gridcolor="rgba(0,0,0,0.1)", title="Run Date", color="black"),
+                yaxis=dict(showgrid=True, gridcolor="rgba(0,0,0,0.1)", title="Score /100", range=[0, 100], color="black")
+            )
+            
+        img_bytes = fig.to_image(format="png")
+        return img_bytes
+    except Exception as e:
+        print(f"Error generating chart image for export: {e}")
+        return None
+
+
+def build_export_data(problem, problem_scores, eval_data, notes_df, reviews_df, evidence_df, posts_df):
+    """Collect all data for a problem into a clean dict for export."""
+    problem_id   = problem["problem_id"]
+    problem_name = str(problem.get("problem_name", "Unknown"))
+    industry     = str(problem.get("industry", "Other"))
+    evidence_count = int(problem.get("evidence_count", 0))
+    final_score  = float(problem.get("latest_final_rank_score", 0) or 0)
+    last_seen    = str(problem.get("last_seen_date", "N/A"))
+
+    note = ""
+    if not notes_df.empty:
+        m = notes_df[notes_df["problem_id"] == problem_id]
+        if not m.empty:
+            note = str(m.iloc[-1].get("note", ""))
+
+    review_status = "Unreviewed"
+    review_reason = ""
+    if not reviews_df.empty:
+        m = reviews_df[reviews_df["problem_id"] == problem_id]
+        if not m.empty:
+            review_status = str(m.iloc[-1].get("status", "Unreviewed"))
+            review_reason = str(m.iloc[-1].get("reason", ""))
+
+    scores = {}
+    if not problem_scores.empty:
+        latest = problem_scores.sort_values("run_date", ascending=False).iloc[0]
+        for k in ["problem_acuteness","customer_clarity","market_size","competition",
+                  "good_ideaspace","real_problem","tarpit_risk","good_proxies"]:
+            scores[k] = float(latest.get(k, 0) or 0)
+
+    # Generate Plotly Chart static image
+    chart_png = generate_plotly_chart_image(problem_scores)
+
+    # Extract linked evidence posts from Reddit
+    evidence_posts = []
+    if not evidence_df.empty and "problem_id" in evidence_df.columns:
+        problem_evidence = evidence_df[evidence_df["problem_id"] == problem_id].copy()
+        if not problem_evidence.empty and not posts_df.empty:
+            merged = problem_evidence.merge(
+                posts_df, on="post_id", how="left", suffixes=("_ev", "_post")
+            )
+            if "upvotes" in merged.columns:
+                merged = merged.sort_values("upvotes", ascending=False)
+            
+            for _, ev_row in merged.iterrows():
+                evidence_posts.append({
+                    "subreddit": str(ev_row.get("subreddit", "unknown")),
+                    "upvotes": int(ev_row.get("upvotes", 0)),
+                    "post_created_date": str(ev_row.get("post_created_date", ""))[:10],
+                    "title": str(ev_row.get("title", "Untitled")),
+                    "body": str(ev_row.get("body", "")),
+                    "top_comments": str(ev_row.get("top_comments", "")),
+                    "similarity_score": float(ev_row.get("similarity_score", 0) or 0),
+                    "wtp_score": int(ev_row.get("wtp_score", ev_row.get("wtp_score_ev", 0)) or 0)
+                })
+
+    return {
+        "problem_name": problem_name, "industry": industry,
+        "evidence_count": evidence_count, "final_score": final_score,
+        "last_seen": last_seen, "note": note,
+        "review_status": review_status, "review_reason": review_reason,
+        "scores": scores, "eval_data": eval_data,
+        "chart_png": chart_png, "evidence_posts": evidence_posts
+    }
+
+
+def export_as_pdf(data):
+    """Generate a PDF from problem data. Returns bytes."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(30, 30, 60)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(pdf.epw, 12, clean_pdf_text(data["problem_name"][:80]), ln=True)
+
+    # Meta row
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(80, 80, 100)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(pdf.epw, 8,
+        clean_pdf_text(
+            f"Industry: {data['industry']}   |   Evidence Posts: {data['evidence_count']}   "
+            f"|   Final Score: {data['final_score']:.1f}/100   |   Last Seen: {data['last_seen']}"
+        ),
+        ln=True)
+
+    # Review status
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(50, 50, 50)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(pdf.epw, 10, clean_pdf_text(f"Review Status: {data['review_status']}"), ln=True)
+    if data["review_reason"]:
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(pdf.epw, 6, clean_pdf_text(f"Reason: {data['review_reason']}"), ln=True)
+
+    pdf.ln(4)
+
+    # Scores section
+    if data["scores"]:
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 30, 60)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(pdf.epw, 10, "Score Breakdown", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(50, 50, 50)
+        score_labels = {
+            "problem_acuteness": "Problem Acuteness",
+            "customer_clarity": "Customer Clarity",
+            "market_size": "Market Size",
+            "competition": "Competition",
+            "good_ideaspace": "Good Ideaspace",
+            "real_problem": "Real Problem",
+            "tarpit_risk": "Tarpit Risk",
+            "good_proxies": "Good Proxies"
+        }
+        for k, label in score_labels.items():
+            val = data["scores"].get(k, 0)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(80, 7, clean_pdf_text(label))
+            pdf.cell(0, 7, f"{val:.0f} / 10", ln=True)
+
+    # Embed Chart image if available
+    if data["chart_png"]:
+        pdf.ln(6)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 30, 60)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(pdf.epw, 10, "Score History Chart", ln=True)
+        chart_io = io.BytesIO(data["chart_png"])
+        pdf.set_x(pdf.l_margin)
+        pdf.image(chart_io, w=110)
+
+    pdf.ln(6)
+
+    # Evaluation table section
+    if data["eval_data"]:
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 30, 60)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(pdf.epw, 10, "Idea Evaluation Table", ln=True)
+        for dim in EVALUATION_DIMENSIONS:
+            key     = dim["key"]
+            dim_val = data["eval_data"].get(key, {})
+            verdict = str(dim_val.get("verdict", "WARN"))
+            answer  = str(dim_val.get("answer", ""))
+            color_map = {"PASS": (34,197,94), "WARN": (234,179,8), "FAIL": (239,68,68)}
+            r, g, b = color_map.get(verdict, (150,150,150))
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(r, g, b)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(pdf.epw, 7, clean_pdf_text(f"[{verdict}] {dim['category']}"), ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(60, 60, 60)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(pdf.epw, 6, clean_pdf_text(answer[:400]))
+            pdf.ln(2)
+
+    # Notes
+    if data["note"]:
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 30, 60)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(pdf.epw, 10, "My Notes", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(60, 60, 60)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(pdf.epw, 6, clean_pdf_text(data["note"][:800]))
+
+    # Reddit Evidence Posts
+    if data["evidence_posts"]:
+        pdf.ln(6)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 30, 60)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(pdf.epw, 10, "Linked Reddit Evidence & Voice of Customer", ln=True)
+        for post in data["evidence_posts"]:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(244, 114, 182) # pink color matching sub badge
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(pdf.epw, 6, clean_pdf_text(f"r/{post['subreddit']}   |   Upvotes: {post['upvotes']}   |   Date: {post['post_created_date']}"), ln=True)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(50, 50, 50)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(pdf.epw, 5, clean_pdf_text(f"Title: {post['title']}"))
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(100, 100, 100)
+            body_preview = post['body'].replace("\n", " ").strip()
+            body_preview = body_preview[:400] + "..." if len(body_preview) > 400 else body_preview
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(pdf.epw, 4, clean_pdf_text(body_preview))
+            
+            if post["top_comments"]:
+                pdf.set_font("Helvetica", "I", 8)
+                pdf.set_text_color(120, 120, 120)
+                comments = post["top_comments"].split(" || ")[:2]
+                pdf.set_x(pdf.l_margin)
+                pdf.cell(pdf.epw, 4, "Top Comments:", ln=True)
+                for c in comments:
+                    pdf.set_x(pdf.l_margin)
+                    pdf.multi_cell(pdf.epw, 4, clean_pdf_text(f"- {c[:200]}"))
+            pdf.ln(3)
+
+    return bytes(pdf.output())
+
+
+def export_as_pptx(data):
+    """Generate a PowerPoint from problem data. Returns bytes."""
+    prs = Presentation()
+    prs.slide_width  = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+
+    def add_text_box(slide, text, left, top, width, height,
+                     font_size=14, bold=False, color=(30,30,60), wrap=True):
+        txBox = slide.shapes.add_textbox(
+            Inches(left), Inches(top), Inches(width), Inches(height)
+        )
+        tf = txBox.text_frame
+        tf.word_wrap = wrap
+        p  = tf.paragraphs[0]
+        p.text = clean_pptx_text(text)
+        p.font.size = Pt(font_size)
+        p.font.bold = bold
+        p.font.color.rgb = RGBColor(*color)
+
+    blank_layout = prs.slide_layouts[6]
+
+    # Slide 1 — Overview
+    slide1 = prs.slides.add_slide(blank_layout)
+    add_text_box(slide1, data["problem_name"], 0.5, 0.3, 12, 1.2,
+                 font_size=28, bold=True, color=(30,30,80))
+    add_text_box(slide1,
+        f"Industry: {data['industry']}   |   Evidence: {data['evidence_count']} posts   "
+        f"|   Score: {data['final_score']:.1f}/100   |   Status: {data['review_status']}",
+        0.5, 1.6, 12, 0.5, font_size=13, color=(80,80,120))
+    if data["note"]:
+        add_text_box(slide1, f"📝 Notes:\n{data['note'][:500]}",
+                     0.5, 2.3, 12, 4.5, font_size=12, color=(60,60,100))
+
+    # Slide 2 — Scores & Plotly Chart
+    if data["scores"]:
+        slide2 = prs.slides.add_slide(blank_layout)
+        add_text_box(slide2, "Score Breakdown & History",
+                     0.5, 0.2, 12, 0.6, font_size=22, bold=True, color=(30,30,80))
+        score_labels = [
+            ("problem_acuteness","Problem Acuteness"),("customer_clarity","Customer Clarity"),
+            ("market_size","Market Size"),("competition","Competition"),
+            ("good_ideaspace","Good Ideaspace"),("real_problem","Real Problem"),
+            ("tarpit_risk","Tarpit Risk"),("good_proxies","Good Proxies")
+        ]
+        col, row = 0, 0
+        for key, label in score_labels:
+            val = data["scores"].get(key, 0)
+            x = 0.5 + col * 2.8
+            y = 1.1 + row * 1.4
+            color = (34,197,94) if val>=7 else (234,179,8) if val>=4 else (239,68,68)
+            add_text_box(slide2, label, x, y, 2.6, 0.4,
+                         font_size=10, bold=True, color=(60,60,80))
+            add_text_box(slide2, f"{val:.0f}/10", x, y+0.35, 2.6, 0.7,
+                         font_size=28, bold=True, color=color)
+            col += 1
+            if col == 2:
+                col = 0
+                row += 1
+
+        # Embed Plotly Score Chart on the Right column
+        if data["chart_png"]:
+            chart_io = io.BytesIO(data["chart_png"])
+            slide2.shapes.add_picture(chart_io, Inches(6.4), Inches(1.1), Inches(6.4), Inches(5.2))
+
+    # Slide 3 — Evaluation Table
+    if data["eval_data"]:
+        slide3 = prs.slides.add_slide(blank_layout)
+        add_text_box(slide3, "Idea Evaluation",
+                     0.3, 0.1, 12, 0.5, font_size=20, bold=True, color=(30,30,80))
+        for i, dim in enumerate(EVALUATION_DIMENSIONS[:5]):
+            dim_val = data["eval_data"].get(dim["key"], {})
+            verdict = str(dim_val.get("verdict", "WARN"))
+            answer  = str(dim_val.get("answer", ""))[:250]
+            vc = {"PASS":(34,197,94),"WARN":(234,179,8),"FAIL":(239,68,68)}
+            col_idx = i % 2
+            row_idx = i // 2
+            x = 0.3 + col_idx * 6.5
+            y = 0.8 + row_idx * 2.1
+            add_text_box(slide3, f"[{verdict}] {dim['category']}",
+                         x, y, 6.2, 0.4, font_size=11, bold=True, color=vc.get(verdict,(150,150,150)))
+            add_text_box(slide3, answer, x, y+0.4, 6.2, 1.5, font_size=10, color=(60,60,80))
+
+    # Slide 4 — Reddit Evidence & Voice of Customer
+    if data["evidence_posts"]:
+        slide4 = prs.slides.add_slide(blank_layout)
+        add_text_box(slide4, "Reddit Evidence & Voice of Customer",
+                     0.5, 0.2, 12, 0.6, font_size=22, bold=True, color=(30,30,80))
+        
+        # Display top 2 evidence posts side-by-side
+        for idx, post in enumerate(data["evidence_posts"][:2]):
+            x = 0.5 + idx * 6.2
+            y = 1.0
+            w = 5.8
+            
+            add_text_box(slide4, f"r/{post['subreddit']}  |  Upvotes: {post['upvotes']}",
+                         x, y, w, 0.4, font_size=12, bold=True, color=(244, 114, 182))
+            
+            title_text = post['title']
+            if len(title_text) > 80:
+                title_text = title_text[:77] + "..."
+            add_text_box(slide4, title_text,
+                         x, y+0.4, w, 0.6, font_size=11, bold=True, color=(30,30,60))
+            
+            body_text = post['body'].replace("\n", " ").strip()
+            if len(body_text) > 350:
+                body_text = body_text[:347] + "..."
+            add_text_box(slide4, body_text,
+                         x, y+1.0, w, 2.0, font_size=10, color=(100,100,100))
+            
+            if post["top_comments"]:
+                comments = post["top_comments"].split(" || ")[:1]
+                if comments:
+                    add_text_box(slide4, f"💬 Top Comment: \"{comments[0][:200]}\"",
+                                 x, y+3.1, w, 1.8, font_size=9, color=(80,80,100))
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
 
 
 @st.cache_data(ttl=60)
@@ -706,6 +1148,79 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
 
     # Expandable detail
     with st.expander(f"📊 Details — {problem_name}", expanded=(len(filtered_df) == 1)):
+
+        # ── Load data for export & widgets ────────────────────────
+        problem_scores_exp = pd.DataFrame()
+        if not scores_df.empty and "problem_id" in scores_df.columns:
+            problem_scores_exp = scores_df[scores_df["problem_id"] == problem_id].copy()
+
+        problem_eval_exp = pd.DataFrame()
+        if not evaluations_df.empty and "problem_id" in evaluations_df.columns:
+            problem_eval_exp = evaluations_df[evaluations_df["problem_id"] == problem_id].copy()
+
+        # Build export data
+        notes_df_exp   = load_notes()
+        reviews_df_exp = load_reviews()
+        eval_data_exp  = {}
+        if not problem_eval_exp.empty:
+            try:
+                eval_data_exp = json.loads(
+                    str(problem_eval_exp.sort_values("run_date", ascending=False)
+                        .iloc[0].get("evaluation_json", "{}"))
+                )
+            except Exception:
+                eval_data_exp = {}
+
+        export_data = build_export_data(
+            problem, problem_scores_exp, eval_data_exp, notes_df_exp, reviews_df_exp, evidence_df, posts_df
+        )
+
+        # ── Premium Header Action Bar ──
+        action_col1, action_col2, action_col3 = st.columns([5.5, 2.25, 2.25])
+        with action_col1:
+            st.markdown(f"<div style='padding-top:6px; font-size:0.85rem; font-weight:800; color:#a5b4fc; letter-spacing:0.8px;'>📋 PROBLEM DISCOVERY & AI ANALYSIS REPORT</div>", unsafe_allow_html=True)
+        with action_col2:
+            pdf_bytes = b""
+            try:
+                pdf_bytes = export_as_pdf(export_data)
+            except Exception as e:
+                import traceback
+                print(f"Error generating PDF for {problem_name}: {e}")
+                traceback.print_exc()
+            
+            if pdf_bytes:
+                st.download_button(
+                    label="📄 PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_{problem_id}",
+                    use_container_width=True
+                )
+            else:
+                st.button("📄 PDF (Failed to generate)", key=f"pdf_failed_{problem_id}", disabled=True, use_container_width=True)
+                
+        with action_col3:
+            pptx_bytes = b""
+            try:
+                pptx_bytes = export_as_pptx(export_data)
+            except Exception as e:
+                import traceback
+                print(f"Error generating PPTX for {problem_name}: {e}")
+                traceback.print_exc()
+                
+            if pptx_bytes:
+                st.download_button(
+                    label="📊 PPTX Deck",
+                    data=pptx_bytes,
+                    file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key=f"pptx_{problem_id}",
+                    use_container_width=True
+                )
+            else:
+                st.button("📊 PPTX (Failed to generate)", key=f"pptx_failed_{problem_id}", disabled=True, use_container_width=True)
+        st.markdown("<hr style='margin: 12px 0 16px 0; border: none; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
 
         # ── Manual Review ─────────────────────────────────────────
         st.markdown("##### ✅ Manual Review")
