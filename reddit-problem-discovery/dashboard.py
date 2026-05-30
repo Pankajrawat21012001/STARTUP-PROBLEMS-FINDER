@@ -402,6 +402,37 @@ scores_df   = data["scores"]
 posts_df    = data["posts"]
 evaluations_df = data.get("evaluations", pd.DataFrame())
 
+if not problems_df.empty and "last_run_timestamp" not in problems_df.columns:
+    problems_df["last_run_timestamp"] = ""
+
+# Backfill last_run_timestamp from problem_scores run_date for problems that haven't
+# been run since the column was introduced. Use latest run_date per problem_id.
+if not problems_df.empty and not scores_df.empty and "run_date" in scores_df.columns:
+    try:
+        # Get the latest run_date per problem
+        latest_score_dates = (
+            scores_df.dropna(subset=["run_date"])
+            .sort_values("run_date")
+            .groupby("problem_id")["run_date"]
+            .last()
+            .reset_index()
+            .rename(columns={"run_date": "_latest_score_date"})
+        )
+        problems_df = problems_df.merge(latest_score_dates, on="problem_id", how="left")
+
+        # Only fill in last_run_timestamp where it's missing/blank
+        missing_ts = (
+            problems_df["last_run_timestamp"].isna() |
+            (problems_df["last_run_timestamp"].astype(str).str.strip() == "") |
+            (problems_df["last_run_timestamp"].astype(str).str.strip().str.lower() == "nan")
+        )
+        problems_df.loc[missing_ts, "last_run_timestamp"] = (
+            problems_df.loc[missing_ts, "_latest_score_date"]
+        )
+        problems_df = problems_df.drop(columns=["_latest_score_date"], errors="ignore")
+    except Exception:
+        pass
+
 # Re-compute WTP live (step4 is no longer run in the pipeline)
 if not evidence_df.empty and not posts_df.empty:
     evidence_df = compute_live_wtp(evidence_df, posts_df)
@@ -502,6 +533,20 @@ with st.sidebar:
         industries += sorted(problems_df["industry"].dropna().unique().tolist())
     selected_industry = st.selectbox("Industry", industries, index=0)
 
+    # Pipeline Run Timestamp filter
+    run_timestamps = ["All"]
+    if not problems_df.empty and "last_run_timestamp" in problems_df.columns:
+        raw_runs = problems_df["last_run_timestamp"].dropna().unique().tolist()
+        sorted_runs = sorted([str(r) for r in raw_runs if str(r).strip() and str(r).strip().lower() != "nan"], reverse=True)
+        if sorted_runs:
+            run_timestamps += ["Latest Run"] + sorted_runs
+            
+    default_run_index = 0
+    if len(run_timestamps) > 1 and "Latest Run" in run_timestamps:
+        default_run_index = 1  # Default to Latest Run
+        
+    selected_run = st.selectbox("Pipeline Run (Completion Time)", run_timestamps, index=default_run_index)
+
     # Min evidence count
     min_evidence = st.slider("Min Evidence Count", 1, 20, 1)
 
@@ -519,7 +564,8 @@ with st.sidebar:
         "Final Rank Score": "latest_final_rank_score",
         "WTP Score":        "avg_wtp_score",
         "Evidence Count":   "evidence_count",
-        "Last Seen Date":   "last_seen_date"
+        "Last Seen Date":   "last_seen_date",
+        "Last Run Timestamp": "last_run_timestamp"
     }
     sort_by_label = st.selectbox("Sort By", list(sort_options.keys()))
     sort_by = sort_options[sort_by_label]
@@ -563,6 +609,16 @@ for col in ["evidence_count", "avg_wtp_score", "latest_total_score", "latest_fin
 # Apply filters
 if selected_industry != "All":
     filtered_df = filtered_df[filtered_df["industry"] == selected_industry]
+
+if "last_run_timestamp" in filtered_df.columns:
+    if selected_run == "Latest Run":
+        all_timestamps = filtered_df["last_run_timestamp"].dropna().unique()
+        valid_timestamps = [t for t in all_timestamps if str(t).strip() and str(t).strip().lower() != "nan"]
+        if valid_timestamps:
+            latest_time = max(valid_timestamps)
+            filtered_df = filtered_df[filtered_df["last_run_timestamp"] == latest_time]
+    elif selected_run != "All":
+        filtered_df = filtered_df[filtered_df["last_run_timestamp"] == selected_run]
 
 filtered_df = filtered_df[filtered_df["evidence_count"]           >= min_evidence]
 filtered_df = filtered_df[filtered_df["avg_wtp_score"]            >= min_wtp]
@@ -626,25 +682,26 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
     # UI 3: Hide 0.0 badge if unscored
     score_badge_html = f'<span class="score-badge {score_cls}">{final_score:.1f}/100</span>' if final_score > 0 else '<span style="font-size:0.8rem; color:rgba(255,255,255,0.4);">No Score</span>'
 
-    header_html = f"""
-    <div class="problem-row">
-        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-            <div style="display:flex; align-items:center; gap:12px;">
-                <span style="font-size:1.3rem; font-weight:800; color:rgba(255,255,255,0.3);">#{rank}</span>
-                <span style="font-size:1.05rem; font-weight:600; color:#e2e8f0;">{problem_name}</span>
-                <span class="industry-badge">{industry}</span>
-                <span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1);">{freshness}</span>
-            </div>
-            <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-                <span style="font-size:0.85rem; color:rgba(255,255,255,0.5);">📝 {evidence_count}</span>
-                <span class="wtp-stars {wtp_cls}">WTP: {avg_wtp:.1f}</span>
-                {f'<span style="font-size:0.8rem; font-weight:600; color:#a78bfa; background:rgba(167,139,250,0.12); border:1px solid rgba(167,139,250,0.25); border-radius:6px; padding:2px 8px;">LLM: {total_score:.0f}/80</span>' if total_score > 0 else ''}
-                {score_badge_html}
-                <span style="font-size:0.8rem; color:rgba(255,255,255,0.35);">{last_seen}</span>
-            </div>
-        </div>
-    </div>
-    """
+    last_run_time = str(problem.get("last_run_timestamp", ""))
+    last_run_display = f'<span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; background: rgba(99,102,241,0.15); color:#818cf8; border:1px solid rgba(99,102,241,0.25);">⏱️ Run: {last_run_time}</span>' if last_run_time and last_run_time.strip() and last_run_time.strip().lower() != "nan" else ""
+
+    header_html = f"""<div class="problem-row">
+<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+<div style="display:flex; align-items:center; gap:12px;">
+<span style="font-size:1.3rem; font-weight:800; color:rgba(255,255,255,0.3);">#{rank}</span>
+<span style="font-size:1.05rem; font-weight:600; color:#e2e8f0;">{problem_name}</span>
+<span class="industry-badge">{industry}</span>
+<span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1);">{freshness}</span>
+{last_run_display}
+</div>
+<div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+<span style="font-size:0.85rem; color:rgba(255,255,255,0.5);">📝 {evidence_count}</span>
+<span class="wtp-stars {wtp_cls}">WTP: {avg_wtp:.1f}</span>
+{f'<span style="font-size:0.8rem; font-weight:600; color:#a78bfa; background:rgba(167,139,250,0.12); border:1px solid rgba(167,139,250,0.25); border-radius:6px; padding:2px 8px;">LLM: {total_score:.0f}/80</span>' if total_score > 0 else ''}
+{score_badge_html}
+</div>
+</div>
+</div>"""
     st.markdown(header_html, unsafe_allow_html=True)
 
     # Expandable detail

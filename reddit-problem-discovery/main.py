@@ -41,6 +41,7 @@ IDEA_EVALUATION_PATH = os.path.join(DATA_DIR, "idea_evaluation.csv")
 
 def main():
     start_time = datetime.now()
+    pipeline_run_timestamp = start_time.strftime("%Y-%m-%d %H:%M:%S")
 
     print("=" * 50)
     print("Reddit Problem Discovery Pipeline")
@@ -90,6 +91,83 @@ def main():
     }
 
     try:
+        # ── Check and Resume Pending Problems ──────────────────────
+        if not problem_ids_df.empty:
+            # Problems missing score
+            missing_score_mask = (problem_ids_df["evidence_count"].astype(float) >= 1) & (
+                (~problem_ids_df["problem_id"].isin(problem_scores_df["problem_id"])) | 
+                (pd.isna(problem_ids_df["latest_final_rank_score"]))
+            )
+            
+            # Problems missing evaluation
+            missing_eval_mask = (problem_ids_df["evidence_count"].astype(float) >= 1) & (
+                ~problem_ids_df["problem_id"].isin(idea_evaluation_df["problem_id"])
+            )
+            
+            pending_score_ids = set(problem_ids_df[missing_score_mask]["problem_id"].tolist())
+            pending_eval_ids = set(problem_ids_df[missing_eval_mask]["problem_id"].tolist())
+            pending_ids = pending_score_ids.union(pending_eval_ids)
+            
+            # Exclude problems manually rejected in the dashboard
+            reviews_path = os.path.join(DATA_DIR, "idea_reviews.csv")
+            if os.path.exists(reviews_path) and pending_ids:
+                try:
+                    reviews = pd.read_csv(reviews_path)
+                    rejected_ids = set(reviews[reviews["status"] == "Rejected"]["problem_id"].tolist())
+                    pending_ids = pending_ids - rejected_ids
+                except Exception:
+                    pass
+
+            if pending_ids:
+                print("=" * 50)
+                print(f"[!] RESUME CHECK: Found {len(pending_ids)} pending problems from previous runs")
+                print(f"    - Missing scoring: {len(pending_score_ids)}")
+                print(f"    - Missing evaluation: {len(pending_eval_ids)}")
+                print("    Catching up these pending problems first...")
+                print("=" * 50)
+                
+                pending_problems_df = problem_ids_df[problem_ids_df["problem_id"].isin(pending_ids)].copy()
+                
+                # 1. Run scoring on pending
+                print(f"\n[Step 4 - Resume] Resuming Groq scoring for pending problems...")
+                pending_problems_df, problem_scores_df = score_with_groq(
+                    pending_problems_df, problem_evidence_df, raw_posts_df, problem_scores_df, is_resume=True, run_timestamp=pipeline_run_timestamp
+                )
+                save_csv(problem_scores_df, PROBLEM_SCORES_PATH)
+                
+                # Sync scoring back to master problem_ids_df
+                if not problem_scores_df.empty:
+                    latest_scores = problem_scores_df.sort_values("run_date").groupby("problem_id").last().reset_index()
+                    for _, row in latest_scores.iterrows():
+                        pid = row["problem_id"]
+                        mask = problem_ids_df["problem_id"] == pid
+                        if mask.any():
+                            problem_ids_df.loc[mask, "latest_total_score"] = row["total_score"]
+                            problem_ids_df.loc[mask, "latest_final_rank_score"] = row["final_rank_score"]
+                            problem_ids_df.loc[mask, "avg_wtp_score"] = row["wtp_score"]
+
+                # 2. Run evaluation table on pending
+                print(f"\n[Step 5 - Resume] Resuming idea evaluation for pending problems...")
+                idea_evaluation_df = generate_idea_evaluation_table(
+                    pending_problems_df, problem_evidence_df, raw_posts_df, idea_evaluation_df, is_resume=True, run_timestamp=pipeline_run_timestamp
+                )
+                save_csv(idea_evaluation_df, IDEA_EVALUATION_PATH)
+
+                # Sync last_run_timestamp and metadata back to master problem_ids_df
+                for _, row in pending_problems_df.iterrows():
+                    pid = row["problem_id"]
+                    mask = problem_ids_df["problem_id"] == pid
+                    if mask.any() and "last_run_timestamp" in pending_problems_df.columns:
+                        val = row["last_run_timestamp"]
+                        if pd.notna(val) and val:
+                            problem_ids_df.loc[mask, "last_run_timestamp"] = val
+                
+                save_csv(problem_ids_df, PROBLEM_IDS_PATH)
+                
+                print("\n" + "=" * 50)
+                print("[!] RESUME CHECK COMPLETE: Pending problems caught up successfully!")
+                print("=" * 50 + "\n")
+
         # ── Step 1: Scrape Reddit ──────────────────────────────────
         print(f"\n[Step 1] Scraping Reddit...")
         new_posts = scrape_reddit(subreddits, search_phrases, existing_post_ids)
@@ -131,7 +209,7 @@ def main():
         # ── Step 4: Groq Scoring ─────────────────────────────────
         print(f"\n[Step 4] Groq scoring...")
         problem_ids_df, problem_scores_df = score_with_groq(
-            problem_ids_df, problem_evidence_df, raw_posts_df, problem_scores_df
+            problem_ids_df, problem_evidence_df, raw_posts_df, problem_scores_df, run_timestamp=pipeline_run_timestamp
         )
 
         save_csv(problem_scores_df, PROBLEM_SCORES_PATH)
@@ -141,9 +219,10 @@ def main():
         # ── Step 5: Idea Evaluation Table ──────────────────────
         print(f"\n[Step 5] Generating idea evaluation tables...")
         idea_evaluation_df = generate_idea_evaluation_table(
-            problem_ids_df, problem_evidence_df, raw_posts_df, idea_evaluation_df
+            problem_ids_df, problem_evidence_df, raw_posts_df, idea_evaluation_df, run_timestamp=pipeline_run_timestamp
         )
         save_csv(idea_evaluation_df, IDEA_EVALUATION_PATH)
+        save_csv(problem_ids_df, PROBLEM_IDS_PATH)
         print(f"  -> Saved to data/idea_evaluation.csv")
 
     except KeyboardInterrupt:

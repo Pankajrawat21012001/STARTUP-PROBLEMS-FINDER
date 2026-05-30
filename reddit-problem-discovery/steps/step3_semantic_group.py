@@ -59,17 +59,61 @@ def _generate_problem_name(post_title, post_body, groq_client):
         'Return only JSON: {"problem_name": "...", "industry": "..."}'
     )
 
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=150
-        )
-        content = response.choices[0].message.content.strip()
+    import re
 
+    def parse_wait_time(err_msg):
+        match = re.search(r"Please try again in\s+([^\s]+)", err_msg)
+        if not match:
+            return None
+        time_str = match.group(1).rstrip('.')
+        h_m = re.match(r"(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", time_str)
+        if not h_m:
+            return None
+        hours = int(h_m.group(1)) if h_m.group(1) else 0
+        minutes = int(h_m.group(2)) if h_m.group(2) else 0
+        seconds = float(h_m.group(3)) if h_m.group(3) else 0.0
+        return hours * 3600 + minutes * 60 + seconds
+
+    content = None
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=150
+            )
+            content = response.choices[0].message.content.strip()
+            break
+        except Exception as e:
+            err_msg = str(e)
+            is_429 = "429" in err_msg or "rate_limit_exceeded" in err_msg.lower()
+            
+            if attempt == max_attempts:
+                print(f"  [x] Groq call failed permanently in step3 after {max_attempts} attempts: {e}")
+                break
+            
+            if is_429:
+                wait_time = parse_wait_time(err_msg)
+                if wait_time is not None:
+                    sleep_duration = wait_time + 5.0
+                    print(f"  [!] Groq Rate Limit (429) hit in step3. Sleeping for {sleep_duration:.2f}s before retry (Attempt {attempt}/{max_attempts})...")
+                else:
+                    sleep_duration = 10.0 * attempt
+                    print(f"  [!] Groq Rate Limit (429) hit in step3. Sleeping for {sleep_duration}s before retry (Attempt {attempt}/{max_attempts})...")
+                time.sleep(sleep_duration)
+            else:
+                sleep_duration = 5.0 * attempt
+                print(f"  [!] Groq API error in step3: {e}. Sleeping for {sleep_duration}s before retry (Attempt {attempt}/{max_attempts})...")
+                time.sleep(sleep_duration)
+
+    if not content:
+        # Fallback: use truncated title
+        return post_title[:60], "Other"
+
+    try:
         # Try to parse JSON from the response
-        # Handle cases where model wraps JSON in markdown code blocks
         if "```" in content:
             content = content.split("```")[1]
             if content.startswith("json"):
@@ -80,28 +124,9 @@ def _generate_problem_name(post_title, post_body, groq_client):
         problem_name = result.get("problem_name", "Unknown Problem")[:80]
         industry = result.get("industry", "Other")
         return problem_name, industry
-
-    except Exception as e:
-        # Retry once
-        try:
-            time.sleep(0.5)
-            response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=150
-            )
-            content = response.choices[0].message.content.strip()
-            if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-            result = json.loads(content)
-            return result.get("problem_name", "Unknown Problem")[:80], result.get("industry", "Other")
-        except Exception:
-            # Fallback: use truncated title
-            return post_title[:60], "Other"
+    except Exception as parse_err:
+        print(f"  [x] Failed to parse generated problem name JSON: {parse_err}. Content was: {content}")
+        return post_title[:60], "Other"
 
 
 def group_problems(filtered_posts, problem_ids_df, problem_evidence_df):
@@ -171,7 +196,8 @@ def group_problems(filtered_posts, problem_ids_df, problem_evidence_df):
             problem_name, industry = _generate_problem_name(
                 post.get("title", ""), post.get("body", ""), groq_client
             )
-            time.sleep(0.5)  # Rate limit for Groq
+            # Take a safe pause to avoid hitting rate limits
+            time.sleep(2.0)
 
             best_problem_id = str(uuid.uuid4())
             best_similarity = 1.0  # Self-match

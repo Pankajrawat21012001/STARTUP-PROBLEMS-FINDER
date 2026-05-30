@@ -70,20 +70,22 @@ def _compute_wtp_score(evidence_posts_df):
     return round(sum(scores) / len(scores), 2)
 
 
-def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_scores_df):
+def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_scores_df, is_resume=False, run_timestamp=None):
     """
     Score qualifying problems using Groq API.
 
     Qualifying criteria:
     - evidence_count >= 3
     - avg_wtp_score >= 1.0
-    - Not already scored today
+    - Not already scored today (or not scored at all if is_resume=True)
 
     Args:
         problem_ids_df: problems DataFrame
         problem_evidence_df: evidence DataFrame
         raw_posts_df: raw posts DataFrame
         problem_scores_df: existing scores DataFrame
+        is_resume: whether we are resuming unscored problems
+        run_timestamp: exact pipeline completion time string
 
     Returns:
         tuple of (updated_problem_ids_df, updated_problem_scores_df)
@@ -92,6 +94,8 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     today = date.today().isoformat()
+    if run_timestamp is None:
+        run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Find qualifying problems
     qualifying = problem_ids_df[
@@ -109,12 +113,16 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         except Exception:
             pass
 
-    # Exclude problems already scored today
+    # Exclude problems already scored
     if not problem_scores_df.empty:
-        scored_today = problem_scores_df[
-            problem_scores_df["run_date"].astype(str) == today
-        ]["problem_id"].tolist()
-        qualifying = qualifying[~qualifying["problem_id"].isin(scored_today)]
+        if is_resume:
+            scored_ids = problem_scores_df["problem_id"].tolist()
+            qualifying = qualifying[~qualifying["problem_id"].isin(scored_ids)]
+        else:
+            scored_today = problem_scores_df[
+                problem_scores_df["run_date"].astype(str) == today
+            ]["problem_id"].tolist()
+            qualifying = qualifying[~qualifying["problem_id"].isin(scored_today)]
 
     if qualifying.empty:
         print("  -> No problems qualify for scoring (need evidence >= 1)")
@@ -250,58 +258,114 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
             problem_ids_df.loc[pid_mask, "latest_total_score"] = total_score
             problem_ids_df.loc[pid_mask, "latest_final_rank_score"] = final_rank_score
             problem_ids_df.loc[pid_mask, "avg_wtp_score"] = wtp_score
+            problem_ids_df.loc[pid_mask, "last_run_timestamp"] = run_timestamp
 
         scored_count += 1
 
-        # Rate limit
-        time.sleep(0.5)
+        # Take a safe pause to avoid hitting rate limits
+        time.sleep(2.0)
 
     print(f"  -> {scored_count} problems scored")
 
     return problem_ids_df, problem_scores_df
 
 
-def _call_groq_for_scores(client, prompt):
-    """Call Groq API and parse JSON response. Retries once on failure."""
-    for attempt in range(2):
+import re
+
+def parse_groq_wait_time(err_msg):
+    """
+    Parses wait duration strings like '1m34.176s', '12m16.992s', '13m18.336s', '15s', or '1h2m3s'
+    from Groq 429 rate limit exception strings and returns total seconds.
+    """
+    match = re.search(r"Please try again in\s+([^\s]+)", err_msg)
+    if not match:
+        return None
+    time_str = match.group(1).rstrip('.')
+    
+    # Check for hours, minutes, seconds
+    h_m = re.match(r"(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", time_str)
+    if not h_m:
+        return None
+    
+    hours = int(h_m.group(1)) if h_m.group(1) else 0
+    minutes = int(h_m.group(2)) if h_m.group(2) else 0
+    seconds = float(h_m.group(3)) if h_m.group(3) else 0.0
+    
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+    return total_seconds
+
+
+def _call_groq_api_with_retry(client, prompt, model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=300):
+    """
+    Calls Groq chat completions API with robust handling for 429 rate limits and general retries.
+    Retries up to 5 times.
+    """
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=300
+                temperature=temperature,
+                max_tokens=max_tokens
             )
             content = response.choices[0].message.content.strip()
-
-            # Handle markdown code blocks
-            if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-
-            scores = json.loads(content)
-
-            # Validate all scores are integers 1–10
-            factor_keys = [
-                "problem_acuteness", "customer_clarity", "market_size", "competition",
-                "good_ideaspace", "real_problem", "tarpit_risk", "good_proxies"
-            ]
-            for key in factor_keys:
-                val = scores.get(key, 5)
-                scores[key] = max(1, min(10, int(val)))
-
-            return scores
-
+            return content
         except Exception as e:
-            if attempt == 0:
-                print(f"  [!] Groq parse error (retrying): {e}")
-                time.sleep(1)
-            else:
-                print(f"  [x] Groq scoring failed after retry: {e}")
+            err_msg = str(e)
+            is_429 = "429" in err_msg or "rate_limit_exceeded" in err_msg.lower()
+            
+            if attempt == max_attempts:
+                print(f"  [x] Groq call failed permanently after {max_attempts} attempts: {e}")
                 return None
-
+            
+            if is_429:
+                wait_time = parse_groq_wait_time(err_msg)
+                if wait_time is not None:
+                    sleep_duration = wait_time + 5.0
+                    print(f"  [!] Groq Rate Limit (429) hit. Requested wait: {wait_time}s. Sleeping for {sleep_duration:.2f}s (with safety buffer) before retry (Attempt {attempt}/{max_attempts})...")
+                else:
+                    sleep_duration = 10.0 * attempt
+                    print(f"  [!] Groq Rate Limit (429) hit but wait time unparseable. Sleeping for {sleep_duration}s before retry (Attempt {attempt}/{max_attempts})...")
+                time.sleep(sleep_duration)
+            else:
+                sleep_duration = 5.0 * attempt
+                print(f"  [!] Groq API error: {e}. Sleeping for {sleep_duration}s before retry (Attempt {attempt}/{max_attempts})...")
+                time.sleep(sleep_duration)
+                
     return None
+
+
+def _call_groq_for_scores(client, prompt):
+    """Call Groq API and parse JSON response. Retries using the robust helper."""
+    content = _call_groq_api_with_retry(
+        client, prompt, model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=300
+    )
+    if content is None:
+        return None
+    try:
+        # Handle markdown code blocks
+        if "```" in content:
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+
+        scores = json.loads(content)
+
+        # Validate all scores are integers 1–10
+        factor_keys = [
+            "problem_acuteness", "customer_clarity", "market_size", "competition",
+            "good_ideaspace", "real_problem", "tarpit_risk", "good_proxies"
+        ]
+        for key in factor_keys:
+            val = scores.get(key, 5)
+            scores[key] = max(1, min(10, int(val)))
+
+        return scores
+    except Exception as parse_err:
+        print(f"  [x] Failed to parse scores JSON from response: {parse_err}. Content was: {content}")
+        return None
 
 
 # ── IDEA EVALUATION TABLE (new addition) ────────────────────────────────
@@ -363,17 +427,19 @@ EVALUATION_DIMENSIONS = [
 
 
 def generate_idea_evaluation_table(
-    problem_ids_df, problem_evidence_df, raw_posts_df, idea_evaluation_df
+    problem_ids_df, problem_evidence_df, raw_posts_df, idea_evaluation_df, is_resume=False, run_timestamp=None
 ):
     """
     NEW: Generate a 10-dimension qualitative evaluation table for each problem using Groq.
     Saves results as JSON string to idea_evaluation.csv.
     Runs after score_with_groq() — qualifies problems with evidence_count >= 1.
-    Skips problems already evaluated today.
+    Skips problems already evaluated today (or not evaluated at all if is_resume=True).
     """
     from groq import Groq
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     today = date.today().isoformat()
+    if run_timestamp is None:
+        run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     qualifying = problem_ids_df[
         problem_ids_df["evidence_count"].astype(float) >= 1
@@ -391,10 +457,14 @@ def generate_idea_evaluation_table(
             pass
 
     if not idea_evaluation_df.empty and "problem_id" in idea_evaluation_df.columns:
-        evaluated_today = idea_evaluation_df[
-            idea_evaluation_df["run_date"].astype(str) == today
-        ]["problem_id"].tolist()
-        qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_today)]
+        if is_resume:
+            evaluated_ids = idea_evaluation_df["problem_id"].tolist()
+            qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_ids)]
+        else:
+            evaluated_today = idea_evaluation_df[
+                idea_evaluation_df["run_date"].astype(str) == today
+            ]["problem_id"].tolist()
+            qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_today)]
 
     if qualifying.empty:
         print("  -> No problems qualify for idea evaluation (already done today or no evidence)")
@@ -453,37 +523,27 @@ Return ONLY valid JSON, no markdown, no preamble:
 {json_template}
 }}"""
 
-        evaluation = None
-        for attempt in range(2):
-            try:
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.15,
-                    max_tokens=2000
-                )
-                content = response.choices[0].message.content.strip()
-                if "```" in content:
-                    content = content.split("```")[1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                    content = content.strip()
-                evaluation = json.loads(content)
-                valid = {"PASS", "WARN", "FAIL"}
-                for d in EVALUATION_DIMENSIONS:
-                    k = d["key"]
-                    if k in evaluation and isinstance(evaluation[k], dict):
-                        v = str(evaluation[k].get("verdict", "WARN")).upper()
-                        evaluation[k]["verdict"] = v if v in valid else "WARN"
-                break
-            except Exception as e:
-                if attempt == 0:
-                    print(f"  [!] Retrying evaluation for \"{problem_name}\": {e}")
-                    time.sleep(1)
-                else:
-                    print(f"  [x] Evaluation failed for \"{problem_name}\"")
+        content = _call_groq_api_with_retry(
+            client, prompt, model="llama-3.3-70b-versatile", temperature=0.15, max_tokens=2000
+        )
+        if content is None:
+            continue
 
-        if evaluation is None:
+        try:
+            if "```" in content:
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+            evaluation = json.loads(content)
+            valid = {"PASS", "WARN", "FAIL"}
+            for d in EVALUATION_DIMENSIONS:
+                k = d["key"]
+                if k in evaluation and isinstance(evaluation[k], dict):
+                    v = str(evaluation[k].get("verdict", "WARN")).upper()
+                    evaluation[k]["verdict"] = v if v in valid else "WARN"
+        except Exception as parse_err:
+            print(f"  [x] Failed to parse evaluation JSON for \"{problem_name}\": {parse_err}")
             continue
 
         existing_ids = pd.to_numeric(
@@ -501,7 +561,13 @@ Return ONLY valid JSON, no markdown, no preamble:
             }])
         ], ignore_index=True)
 
-        time.sleep(0.5)
+        # Update last_run_timestamp in problem_ids_df
+        pid_mask = problem_ids_df["problem_id"] == problem_id
+        if pid_mask.any():
+            problem_ids_df.loc[pid_mask, "last_run_timestamp"] = run_timestamp
+
+        # Take a safe pause to avoid hitting rate limits
+        time.sleep(2.0)
 
     return idea_evaluation_df
 

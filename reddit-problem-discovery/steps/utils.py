@@ -59,7 +59,8 @@ RAW_POSTS_COLUMNS = [
 
 PROBLEM_IDS_COLUMNS = [
     "problem_id", "problem_name", "industry", "first_seen_date", "last_seen_date",
-    "evidence_count", "avg_wtp_score", "latest_total_score", "latest_final_rank_score"
+    "evidence_count", "avg_wtp_score", "latest_total_score", "latest_final_rank_score",
+    "last_run_timestamp"
 ]
 
 PROBLEM_EVIDENCE_COLUMNS = [
