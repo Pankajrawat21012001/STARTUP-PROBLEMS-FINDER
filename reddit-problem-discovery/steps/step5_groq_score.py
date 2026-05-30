@@ -113,16 +113,10 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
         except Exception:
             pass
 
-    # Exclude problems already scored
+    # Exclude problems already scored (ever)
     if not problem_scores_df.empty:
-        if is_resume:
-            scored_ids = problem_scores_df["problem_id"].tolist()
-            qualifying = qualifying[~qualifying["problem_id"].isin(scored_ids)]
-        else:
-            scored_today = problem_scores_df[
-                problem_scores_df["run_date"].astype(str) == today
-            ]["problem_id"].tolist()
-            qualifying = qualifying[~qualifying["problem_id"].isin(scored_today)]
+        scored_ids = problem_scores_df["problem_id"].tolist()
+        qualifying = qualifying[~qualifying["problem_id"].isin(scored_ids)]
 
     if qualifying.empty:
         print("  -> No problems qualify for scoring (need evidence >= 1)")
@@ -258,6 +252,9 @@ def score_with_groq(problem_ids_df, problem_evidence_df, raw_posts_df, problem_s
             problem_ids_df.loc[pid_mask, "latest_total_score"] = total_score
             problem_ids_df.loc[pid_mask, "latest_final_rank_score"] = final_rank_score
             problem_ids_df.loc[pid_mask, "avg_wtp_score"] = wtp_score
+            # Cast to object to avoid float64 dtype mismatch when column is all-NaN
+            if problem_ids_df["last_run_timestamp"].dtype != object:
+                problem_ids_df["last_run_timestamp"] = problem_ids_df["last_run_timestamp"].astype(object)
             problem_ids_df.loc[pid_mask, "last_run_timestamp"] = run_timestamp
 
         scored_count += 1
@@ -457,17 +454,11 @@ def generate_idea_evaluation_table(
             pass
 
     if not idea_evaluation_df.empty and "problem_id" in idea_evaluation_df.columns:
-        if is_resume:
-            evaluated_ids = idea_evaluation_df["problem_id"].tolist()
-            qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_ids)]
-        else:
-            evaluated_today = idea_evaluation_df[
-                idea_evaluation_df["run_date"].astype(str) == today
-            ]["problem_id"].tolist()
-            qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_today)]
+        evaluated_ids = idea_evaluation_df["problem_id"].tolist()
+        qualifying = qualifying[~qualifying["problem_id"].isin(evaluated_ids)]
 
     if qualifying.empty:
-        print("  -> No problems qualify for idea evaluation (already done today or no evidence)")
+        print("  -> No problems qualify for idea evaluation (already done or no evidence)")
         return idea_evaluation_df
 
     print(f"  -> {len(qualifying)} problems queued for idea evaluation table")
@@ -564,6 +555,9 @@ Return ONLY valid JSON, no markdown, no preamble:
         # Update last_run_timestamp in problem_ids_df
         pid_mask = problem_ids_df["problem_id"] == problem_id
         if pid_mask.any():
+            # Cast to object to avoid float64 dtype mismatch when column is all-NaN
+            if problem_ids_df["last_run_timestamp"].dtype != object:
+                problem_ids_df["last_run_timestamp"] = problem_ids_df["last_run_timestamp"].astype(object)
             problem_ids_df.loc[pid_mask, "last_run_timestamp"] = run_timestamp
 
         # Take a safe pause to avoid hitting rate limits

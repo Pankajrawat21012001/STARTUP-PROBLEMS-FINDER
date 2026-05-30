@@ -53,11 +53,7 @@ def main():
     load_dotenv(env_path)
 
     # Verify API keys are set
-    if not os.getenv("SCRAPER_API_KEY") or os.getenv("SCRAPER_API_KEY") == "your_scraperapi_key":
-        print("\n[x] ERROR: Please set your ScraperAPI key in .env file")
-        print("  Get key at: https://dashboard.scraperapi.com")
-        sys.exit(1)
-
+    # Note: Reddit scraping uses PullPush.io (free, no auth)
     if not os.getenv("GROQ_API_KEY") or os.getenv("GROQ_API_KEY") == "your_groq_api_key":
         print("\n[x] ERROR: Please set your Groq API key in .env file")
         print("  Get key at: https://console.groq.com")
@@ -69,6 +65,9 @@ def main():
     # Load existing data
     raw_posts_df = load_csv(RAW_POSTS_PATH, RAW_POSTS_COLUMNS)
     problem_ids_df = load_csv(PROBLEM_IDS_PATH, PROBLEM_IDS_COLUMNS)
+    for col in ["first_seen_date", "last_seen_date", "last_run_timestamp"]:
+        if col in problem_ids_df.columns:
+            problem_ids_df[col] = problem_ids_df[col].astype(object)
     problem_evidence_df = load_csv(PROBLEM_EVIDENCE_PATH, PROBLEM_EVIDENCE_COLUMNS)
     problem_scores_df = load_csv(PROBLEM_SCORES_PATH, PROBLEM_SCORES_COLUMNS)
     idea_evaluation_df = load_csv(IDEA_EVALUATION_PATH, IDEA_EVALUATION_COLUMNS)

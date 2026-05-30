@@ -182,6 +182,7 @@ def clean_pptx_text(text):
     return text
 
 
+@st.cache_data(ttl=300)
 def generate_plotly_chart_image(problem_scores):
     """Generate the Plotly chart as PNG bytes."""
     if problem_scores.empty:
@@ -305,6 +306,7 @@ def build_export_data(problem, problem_scores, eval_data, notes_df, reviews_df, 
     }
 
 
+@st.cache_data(ttl=300)
 def export_as_pdf(data):
     """Generate a PDF from problem data. Returns bytes."""
     pdf = FPDF()
@@ -315,7 +317,7 @@ def export_as_pdf(data):
     pdf.set_font("Helvetica", "B", 20)
     pdf.set_text_color(30, 30, 60)
     pdf.set_x(pdf.l_margin)
-    pdf.cell(pdf.epw, 12, clean_pdf_text(data["problem_name"][:80]), ln=True)
+    pdf.cell(pdf.epw, 12, clean_pdf_text(data["problem_name"][:80]), new_x="LMARGIN", new_y="NEXT")
 
     # Meta row
     pdf.set_font("Helvetica", "", 11)
@@ -326,17 +328,17 @@ def export_as_pdf(data):
             f"Industry: {data['industry']}   |   Evidence Posts: {data['evidence_count']}   "
             f"|   Final Score: {data['final_score']:.1f}/100   |   Last Seen: {data['last_seen']}"
         ),
-        ln=True)
+        new_x="LMARGIN", new_y="NEXT")
 
     # Review status
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(50, 50, 50)
     pdf.set_x(pdf.l_margin)
-    pdf.cell(pdf.epw, 10, clean_pdf_text(f"Review Status: {data['review_status']}"), ln=True)
+    pdf.cell(pdf.epw, 10, clean_pdf_text(f"Review Status: {data['review_status']}"), new_x="LMARGIN", new_y="NEXT")
     if data["review_reason"]:
         pdf.set_font("Helvetica", "", 10)
         pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 6, clean_pdf_text(f"Reason: {data['review_reason']}"), ln=True)
+        pdf.cell(pdf.epw, 6, clean_pdf_text(f"Reason: {data['review_reason']}"), new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(4)
 
@@ -345,7 +347,7 @@ def export_as_pdf(data):
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(30, 30, 60)
         pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 10, "Score Breakdown", ln=True)
+        pdf.cell(pdf.epw, 10, "Score Breakdown", new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(50, 50, 50)
         score_labels = {
@@ -362,7 +364,7 @@ def export_as_pdf(data):
             val = data["scores"].get(k, 0)
             pdf.set_x(pdf.l_margin)
             pdf.cell(80, 7, clean_pdf_text(label))
-            pdf.cell(0, 7, f"{val:.0f} / 10", ln=True)
+            pdf.cell(0, 7, f"{val:.0f} / 10", new_x="LMARGIN", new_y="NEXT")
 
     # Embed Chart image if available
     if data["chart_png"]:
@@ -370,7 +372,7 @@ def export_as_pdf(data):
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(30, 30, 60)
         pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 10, "Score History Chart", ln=True)
+        pdf.cell(pdf.epw, 10, "Score History Chart", new_x="LMARGIN", new_y="NEXT")
         chart_io = io.BytesIO(data["chart_png"])
         pdf.set_x(pdf.l_margin)
         pdf.image(chart_io, w=110)
@@ -382,7 +384,7 @@ def export_as_pdf(data):
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(30, 30, 60)
         pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 10, "Idea Evaluation Table", ln=True)
+        pdf.cell(pdf.epw, 10, "Idea Evaluation Table", new_x="LMARGIN", new_y="NEXT")
         for dim in EVALUATION_DIMENSIONS:
             key     = dim["key"]
             dim_val = data["eval_data"].get(key, {})
@@ -393,7 +395,7 @@ def export_as_pdf(data):
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(r, g, b)
             pdf.set_x(pdf.l_margin)
-            pdf.cell(pdf.epw, 7, clean_pdf_text(f"[{verdict}] {dim['category']}"), ln=True)
+            pdf.cell(pdf.epw, 7, clean_pdf_text(f"[{verdict}] {dim['category']}"), new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(60, 60, 60)
             pdf.set_x(pdf.l_margin)
@@ -406,7 +408,7 @@ def export_as_pdf(data):
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(30, 30, 60)
         pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 10, "My Notes", ln=True)
+        pdf.cell(pdf.epw, 10, "My Notes", new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(60, 60, 60)
         pdf.set_x(pdf.l_margin)
@@ -418,12 +420,12 @@ def export_as_pdf(data):
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(30, 30, 60)
         pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 10, "Linked Reddit Evidence & Voice of Customer", ln=True)
+        pdf.cell(pdf.epw, 10, "Linked Reddit Evidence & Voice of Customer", new_x="LMARGIN", new_y="NEXT")
         for post in data["evidence_posts"]:
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(244, 114, 182) # pink color matching sub badge
             pdf.set_x(pdf.l_margin)
-            pdf.cell(pdf.epw, 6, clean_pdf_text(f"r/{post['subreddit']}   |   Upvotes: {post['upvotes']}   |   Date: {post['post_created_date']}"), ln=True)
+            pdf.cell(pdf.epw, 6, clean_pdf_text(f"r/{post['subreddit']}   |   Upvotes: {post['upvotes']}   |   Date: {post['post_created_date']}"), new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(50, 50, 50)
             pdf.set_x(pdf.l_margin)
@@ -440,7 +442,7 @@ def export_as_pdf(data):
                 pdf.set_text_color(120, 120, 120)
                 comments = post["top_comments"].split(" || ")[:2]
                 pdf.set_x(pdf.l_margin)
-                pdf.cell(pdf.epw, 4, "Top Comments:", ln=True)
+                pdf.cell(pdf.epw, 4, "Top Comments:", new_x="LMARGIN", new_y="NEXT")
                 for c in comments:
                     pdf.set_x(pdf.l_margin)
                     pdf.multi_cell(pdf.epw, 4, clean_pdf_text(f"- {c[:200]}"))
@@ -449,6 +451,7 @@ def export_as_pdf(data):
     return bytes(pdf.output())
 
 
+@st.cache_data(ttl=300)
 def export_as_pptx(data):
     """Generate a PowerPoint from problem data. Returns bytes."""
     prs = Presentation()
@@ -963,7 +966,7 @@ with st.sidebar:
     st.markdown("<h3 style='text-align: center; color: white; margin-top: 10px; margin-bottom: 15px; font-weight: 700; letter-spacing: 0.5px;'>🎯 Filters & Controls</h3>", unsafe_allow_html=True)
     
     # Premium Centered Full-Width Refresh Button
-    if st.button("🔄 Refresh Dashboard", use_container_width=True, help="Clear cache and reload raw data"):
+    if st.button("🔄 Refresh Dashboard", width="stretch", help="Clear cache and reload raw data"):
         st.cache_data.clear()
         st.rerun()
         
@@ -1195,10 +1198,10 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                     file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pdf",
                     mime="application/pdf",
                     key=f"pdf_{problem_id}",
-                    use_container_width=True
+                    width="stretch"
                 )
             else:
-                st.button("📄 PDF (Failed to generate)", key=f"pdf_failed_{problem_id}", disabled=True, use_container_width=True)
+                st.button("📄 PDF (Failed to generate)", key=f"pdf_failed_{problem_id}", disabled=True, width="stretch")
                 
         with action_col3:
             pptx_bytes = b""
@@ -1216,10 +1219,10 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                     file_name=f"{problem_name[:40].replace(' ','_')}_evaluation.pptx",
                     mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                     key=f"pptx_{problem_id}",
-                    use_container_width=True
+                    width="stretch"
                 )
             else:
-                st.button("📊 PPTX (Failed to generate)", key=f"pptx_failed_{problem_id}", disabled=True, use_container_width=True)
+                st.button("📊 PPTX (Failed to generate)", key=f"pptx_failed_{problem_id}", disabled=True, width="stretch")
         st.markdown("<hr style='margin: 12px 0 16px 0; border: none; border-top: 1px solid rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
 
         # ── Manual Review ─────────────────────────────────────────
@@ -1415,7 +1418,7 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                         yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)",
                                    title="Score /100", range=[0, 100])
                     )
-                st.plotly_chart(fig2, use_container_width=True,
+                st.plotly_chart(fig2, width="stretch",
                                 key=f"score_history_{problem_id}")
             else:
                 st.info("No score history available yet")
@@ -1494,7 +1497,7 @@ for rank, (idx, problem) in enumerate(filtered_df.iterrows(), 1):
                 available_cols = [c for c in display_cols if c in problem_scores.columns]
                 st.dataframe(
                     problem_scores[available_cols].sort_values("run_date", ascending=False),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 
