@@ -292,7 +292,7 @@ def parse_groq_wait_time(err_msg):
     return total_seconds
 
 
-def _call_groq_api_with_retry(client, prompt, model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=300):
+def _call_groq_api_with_retry(client, prompt, model="qwen/qwen3-32b", temperature=0.1, max_tokens=300, reasoning_effort="none"):
     """
     Calls Groq chat completions API with robust handling for 429 rate limits and general retries.
     Retries up to 5 times.
@@ -304,7 +304,8 @@ def _call_groq_api_with_retry(client, prompt, model="llama-3.3-70b-versatile", t
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort
             )
             content = response.choices[0].message.content.strip()
             return content
@@ -336,7 +337,11 @@ def _call_groq_api_with_retry(client, prompt, model="llama-3.3-70b-versatile", t
 def _call_groq_for_scores(client, prompt):
     """Call Groq API and parse JSON response. Retries using the robust helper."""
     content = _call_groq_api_with_retry(
-        client, prompt, model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=300
+        client, prompt,
+        model="qwen/qwen3-32b",
+        temperature=0.1,
+        max_tokens=500,
+        reasoning_effort="none"
     )
     if content is None:
         return None
@@ -515,7 +520,10 @@ Return ONLY valid JSON, no markdown, no preamble:
 }}"""
 
         content = _call_groq_api_with_retry(
-            client, prompt, model="llama-3.3-70b-versatile", temperature=0.15, max_tokens=2000
+            client, prompt,
+            model="qwen/qwen3-32b",
+            temperature=0.6,
+            max_tokens=3000
         )
         if content is None:
             continue

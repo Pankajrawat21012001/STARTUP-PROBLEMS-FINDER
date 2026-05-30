@@ -79,10 +79,11 @@ def _generate_problem_name(post_title, post_body, groq_client):
     for attempt in range(1, max_attempts + 1):
         try:
             response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="qwen/qwen3-32b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=150
+                max_tokens=150,
+                reasoning_effort="none"
             )
             content = response.choices[0].message.content.strip()
             break
